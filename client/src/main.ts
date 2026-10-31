@@ -1,9 +1,10 @@
 // Spiel-Client: Netzwerk, Vorhersage (Prediction), Interpolation, Kamera und HUD.
 import * as THREE from 'three';
-import { buildMap, Box, WORLD } from '../../shared/map';
+import { buildCity, Box, WORLD } from '../../shared/map';
 import { Body, Input, DT, FOOT, CAR, PLANE, newBody, copyBody, step } from '../../shared/sim';
 import { ctl, initControls, setThrottle, setThrottleVisible } from './controls';
 import { createWorld } from './world';
+import { loadAssets } from './assets';
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const canvas = $<HTMLCanvasElement>('game');
@@ -89,8 +90,9 @@ function onWelcome(m: any, name: string) {
   myId = m.id;
   myName = name;
   if (!mapBuilt) {
-    boxes = buildMap(m.seed);
-    world.addMap(boxes);
+    const city = buildCity(m.seed);
+    boxes = city.boxes;
+    world.addMap(city);
     mapBuilt = true;
   }
   clearObjects();
@@ -104,10 +106,16 @@ function onWelcome(m: any, name: string) {
 
 function clearObjects() {
   for (const g of [objs.pl, objs.ve, objs.pr]) {
-    for (const o of g.values()) world.scene.remove(o);
+    for (const o of g.values()) {
+      world.disposeObject(o);
+      world.scene.remove(o);
+    }
     g.clear();
   }
-  if (myMesh) world.scene.remove(myMesh);
+  if (myMesh) {
+    world.disposeObject(myMesh);
+    world.scene.remove(myMesh);
+  }
   myMesh = null;
 }
 
@@ -169,6 +177,8 @@ function toast(text: string) {
 function onEvent(e: any) {
   if (e.k === 'shot') {
     world.tracer(e.a, e.b);
+    const shooter = e.by === myId ? myMesh : objs.pl.get(e.by);
+    if (shooter) world.playerFired(shooter);
     if (e.by === myId) navigator.vibrate?.(8);
   } else if (e.k === 'boom') {
     world.boom(e.x, e.y, e.z, e.r);
@@ -315,12 +325,13 @@ function interp(kind: 'pl' | 've', id: number, rt: number): any {
   return a ?? b;
 }
 
-function syncObjects(rt: number, alpha: number) {
+function syncObjects(rt: number, alpha: number, dt: number) {
   const last = snaps[snaps.length - 1];
   if (!last) return;
   // Spieler
   for (const [id, o] of objs.pl) {
     if (!last.pl.has(id) || id === myId) {
+      world.disposeObject(o);
       world.scene.remove(o);
       objs.pl.delete(id);
     }
@@ -329,29 +340,36 @@ function syncObjects(rt: number, alpha: number) {
     if (p.i === myId) continue;
     let o = objs.pl.get(p.i);
     if (!o) {
-      o = world.makePlayer(p.n, p.h);
+      o = world.makePlayer(p.n, p.h, p.i);
       world.scene.add(o);
       objs.pl.set(p.i, o);
     }
     const s = interp('pl', p.i, rt) ?? p;
     o.visible = p.hp > 0 && p.v === 0;
+    const spd = Math.hypot(s.x - (o.userData.px ?? s.x), s.z - (o.userData.pz ?? s.z)) / Math.max(dt, 0.001);
+    o.userData.px = s.x;
+    o.userData.pz = s.z;
+    o.userData.spd = (o.userData.spd ?? 0) * 0.7 + spd * 0.3;
     o.position.set(s.x, s.y, s.z);
     o.rotation.y = s.yaw;
+    world.animatePlayer(o, { speed: o.userData.spd, dead: p.hp <= 0 });
   }
   // Eigene Figur
   const me = last.pl.get(myId);
   if (me && !myMesh) {
-    myMesh = world.makePlayer('', me.h);
+    myMesh = world.makePlayer('', me.h, myId);
     world.scene.add(myMesh);
   }
   if (myMesh) {
     myMesh.visible = hp > 0 && myVeh === 0;
     myMesh.position.set(lerp(prev.x, body.x, alpha), 0, lerp(prev.z, body.z, alpha));
     myMesh.rotation.y = ctl.yaw;
+    world.animatePlayer(myMesh, { speed: body.mode === FOOT ? body.speed : 0, dead: hp <= 0 });
   }
   // Fahrzeuge
   for (const [id, o] of objs.ve) {
     if (!last.ve.has(id)) {
+      world.disposeObject(o);
       world.scene.remove(o);
       objs.ve.delete(id);
     }
@@ -360,18 +378,32 @@ function syncObjects(rt: number, alpha: number) {
     let o = objs.ve.get(v.i);
     if (!o) {
       const hue = last.pl.get(v.o)?.h ?? 30;
-      o = v.k === PLANE ? world.makePlane(hue) : world.makeCar(hue);
+      o = v.k === PLANE ? world.makePlane(hue) : world.makeCar(hue, v.i);
       o.rotation.order = 'YXZ';
       world.scene.add(o);
       objs.ve.set(v.i, o);
     }
+    let vx: number, vz: number, vyaw: number;
     if (v.i === myVeh && body.mode !== FOOT) {
-      o.position.set(lerp(prev.x, body.x, alpha), lerp(prev.y, body.y, alpha), lerp(prev.z, body.z, alpha));
+      vx = lerp(prev.x, body.x, alpha);
+      vz = lerp(prev.z, body.z, alpha);
+      o.position.set(vx, lerp(prev.y, body.y, alpha), vz);
       o.rotation.set(body.pitch, body.yaw, -body.roll);
+      vyaw = body.yaw;
     } else {
       const s = interp('ve', v.i, rt) ?? v;
+      vx = s.x;
+      vz = s.z;
       o.position.set(s.x, s.y, s.z);
       o.rotation.set(s.p, s.yaw, -s.r);
+      vyaw = s.yaw;
+    }
+    if (v.k === CAR) {
+      const mvx = vx - (o.userData.lx ?? vx);
+      const mvz = vz - (o.userData.lz ?? vz);
+      world.spinWheels(o, mvx * -Math.sin(vyaw) + mvz * -Math.cos(vyaw));
+      o.userData.lx = vx;
+      o.userData.lz = vz;
     }
   }
   // Raketen
@@ -450,9 +482,9 @@ function frame(now: number) {
     }
   }
   const alpha = Math.min(1, acc / DT);
-  syncObjects(now - 100, alpha);
+  syncObjects(now - 100, alpha, dt);
   updateCamera(alpha, dt);
-  world.updateFx(now);
+  world.update(now, dt);
   world.renderer.render(world.scene, world.camera);
   updateHud(now);
   if (joined && now - mmAt > 100) {
@@ -479,7 +511,20 @@ try {
 const urlRoom = new URLSearchParams(location.search).get('room');
 if (urlRoom) roomEl.value = urlRoom;
 
+// Grafik laden (KayKit-Modelle). Klappt es nicht, laeuft das Spiel mit einfachen Klotz-Modellen.
+let assetsReady = false;
+const playBtn = $<HTMLButtonElement>('play');
+playBtn.disabled = true;
+$('err').textContent = 'Lade Grafik …';
+loadAssets().then((a) => {
+  world.setAssets(a);
+  assetsReady = true;
+  playBtn.disabled = false;
+  $('err').textContent = a ? '' : 'Grafik konnte nicht geladen werden, einfache Darstellung';
+});
+
 const play = () => {
+  if (!assetsReady) return;
   const name = nameEl.value.trim();
   const room = roomEl.value.trim();
   if (!name) {
@@ -501,4 +546,4 @@ setInterval(() => send({ t: 'ping', c: performance.now() }), 2000);
 requestAnimationFrame(frame);
 
 // Fuer Tests und Debugging in der Konsole
-(window as any).__game = { ctl, get body() { return body; }, get hp() { return hp; }, get snaps() { return snaps.length; }, WORLD };
+(window as any).__game = { ctl, get info() { return { ...world.renderer.info.render, calls: world.renderer.info.render.calls, geometries: world.renderer.info.memory.geometries, textures: world.renderer.info.memory.textures }; }, get body() { return body; }, get hp() { return hp; }, get snaps() { return snaps.length; }, WORLD };
