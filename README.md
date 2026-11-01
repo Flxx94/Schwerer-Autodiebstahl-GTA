@@ -112,18 +112,26 @@ weicht der Client ab, wird er korrigiert. Andere Spieler werden mit 100 ms Puffe
 
 ## Grafik und Lizenzen
 
-Die Modelle stammen von **Kay Lousberg (KayKit)**, Lizenz CC0 (frei nutzbar, Nennung freiwillig):
+Alle Modelle sind frei nutzbar (Lizenzdateien liegen in `client/public/assets/`):
 
-- [KayKit City Builder Bits 1.0](https://kaylousberg.itch.io/city-builder-bits): Gebäude, Autos, Laternen, Ampeln, Bänke, Hydranten, Container, Wassertürme, Büsche
-- [KayKit Adventurers 1.0](https://kaylousberg.itch.io/kaykit-adventurers): Figuren „Rogue“ und „Rogue Hooded“ mit Animationen
+- **Kay Lousberg (KayKit)**, CC0: [City Builder Bits](https://kaylousberg.itch.io/city-builder-bits) (Gebäude, Autos, Laternen, Ampeln, Bänke, Hydranten, Container, Wassertürme, Büsche),
+  [Adventurers](https://kaylousberg.itch.io/kaykit-adventurers) (Figuren mit Animationen),
+  [Prototype Bits](https://github.com/KayKit-Game-Assets/KayKit-Prototype-Bits-1.0) (Fässer, Paletten, Kisten)
+- **Kenney**, MIT: Pickups aus dem [Starter-Kit Racing](https://github.com/KenneyNL/Starter-Kit-Racing)
+- Selbst gebaut: Flugzeug, Kiefern, Himmel, Partikel und Decals
 
-Die Dateien liegen unter `client/public/assets/` (mit den Original-Lizenzdateien). Das Flugzeug ist selbst gebaut.
+Maßstäbe sind echte Meter: Figur 1,8 m, Autos 4,5 bis 5,2 m, Stockwerke rund 3,3 m, Straßen 24 m breit.
+Das Flugzeug ist mit 8 m Spannweite absichtlich kleiner, damit es zwischen die Häuser passt.
 
-Eigene Effekte (kein Fremdmaterial): Himmel-Shader mit Wolken, weiche Schatten, Leuchtspuren, Mündungsfeuer, Funken,
-Explosionen mit Rauch und Staub hinter schnellen Autos. Die Figuren zielen mit dem Oberkörper, während die Beine
-weiterlaufen. Ist das Tablet zu langsam, schaltet das Spiel nach wenigen Sekunden selbst Schatten und Auflösung herunter.
+Effekte: Himmel-Shader mit Wolken, weiche Schatten, Leuchtspuren, Mündungsfeuer, Funken, **Einschusslöcher** an
+Wänden und am Boden (verblassen nach etwa 25 Sekunden), Brandflecken nach Explosionen. Fahrzeuge **rauchen** ab halber
+Gesundheit, **brennen** bei 0 Leben rund 4 Sekunden (Insassen nehmen Schaden) und **explodieren** dann mit Feuerball,
+Trümmern, Rauchsäule und Kamerawackeln. Die Figuren zielen mit dem Oberkörper, während die Beine weiterlaufen.
+Ist das Tablet zu langsam, schaltet das Spiel nach wenigen Sekunden selbst Schatten und Auflösung herunter.
 Mit `?q=low` oder `?q=high` an der Adresse legst du die Stufe fest.
-Fehlen die Modelle oder lassen sie sich nicht laden, zeigt das Spiel einfache Klötze statt der Stadt.
+
+Weitere Packs von itch.io erreiche ich in meiner Umgebung nicht (nur GitHub). Eigene Modelle (`.gltf`/`.glb`)
+kannst du in `client/public/assets/` legen und in `client/src/assets.ts` eintragen.
 
 Das Projekt selbst steht unter der GNU General Public License v3 (siehe `LICENSE`). Eingesetzte Bibliotheken:
 Three.js (MIT), ws (MIT), esbuild (MIT).
