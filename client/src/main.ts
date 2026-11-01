@@ -11,7 +11,7 @@ const canvas = $<HTMLCanvasElement>('game');
 const world = createWorld(canvas);
 
 interface PlayerS { i: number; n: string; h: number; x: number; y: number; z: number; yaw: number; hp: number; v: number; k: number; d: number; w: number }
-interface VehS { i: number; k: number; x: number; y: number; z: number; yaw: number; p: number; r: number; hp: number; d: number; o: number }
+interface VehS { i: number; k: number; x: number; y: number; z: number; yaw: number; p: number; r: number; hp: number; b?: number; d: number; o: number }
 interface ProjS { i: number; x: number; y: number; z: number }
 interface Snap { t: number; pl: Map<number, PlayerS>; ve: Map<number, VehS> }
 
@@ -176,7 +176,7 @@ function toast(text: string) {
 
 function onEvent(e: any) {
   if (e.k === 'shot') {
-    world.tracer(e.a, e.b);
+    world.tracer(e.a, e.b, e.hit, e.wl);
     const shooter = e.by === myId ? myMesh : objs.pl.get(e.by);
     if (shooter) world.playerFired(shooter);
     if (e.by === myId) navigator.vibrate?.(8);
@@ -405,6 +405,7 @@ function syncObjects(rt: number, alpha: number, dt: number) {
       o.rotation.set(s.p, s.yaw, -s.r);
       vyaw = s.yaw;
     }
+    world.vehicleFx(o, v.k, v.hp / (v.k === PLANE ? 200 : 300), !!v.b, dt);
     if (v.k === CAR) {
       const mvx = vx - (o.userData.lx ?? vx);
       const mvz = vz - (o.userData.lz ?? vz);
@@ -570,4 +571,4 @@ setInterval(() => send({ t: 'ping', c: performance.now() }), 2000);
 requestAnimationFrame(frame);
 
 // Fuer Tests und Debugging in der Konsole
-(window as any).__game = { ctl, world,  get info() { return { ...world.renderer.info.render, calls: world.renderer.info.render.calls, geometries: world.renderer.info.memory.geometries, textures: world.renderer.info.memory.textures }; }, get body() { return body; }, get hp() { return hp; }, get snaps() { return snaps.length; }, WORLD };
+(window as any).__game = { ctl, world, get boxes() { return boxes; },  get info() { return { ...world.renderer.info.render, calls: world.renderer.info.render.calls, geometries: world.renderer.info.memory.geometries, textures: world.renderer.info.memory.textures }; }, get body() { return body; }, get hp() { return hp; }, get snaps() { return snaps.length; }, WORLD };

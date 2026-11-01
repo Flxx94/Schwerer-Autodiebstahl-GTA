@@ -2,6 +2,7 @@
 // Mit KayKit-Modellen (assets.ts); fehlen sie, gibt es einfache Klotz-Modelle als Ersatz.
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { City, Box, WORLD, CELL, RUNWAY } from '../../shared/map';
 import { Assets } from './assets';
 
@@ -30,7 +31,8 @@ export interface World {
   spinWheels(o: THREE.Object3D, meters: number): void;
   makePlane(hue: number): THREE.Object3D;
   makeRocket(): THREE.Mesh;
-  tracer(a: number[], b: number[]): void;
+  tracer(a: number[], b: number[], hit?: number, wl?: number): void;
+  vehicleFx(o: THREE.Object3D, kind: number, hpRatio: number, burning: boolean, dt: number): void;
   boom(x: number, y: number, z: number, r: number): void;
   update(nowMs: number, dt: number): void;
   resize(): void;
@@ -215,8 +217,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   const scene = new THREE.Scene();
   const SKY_TOP = new THREE.Color(0x3f86d8);
   const SKY_HOR = new THREE.Color(0xcfe3f2);
-  scene.fog = new THREE.Fog(SKY_HOR.clone(), 160, 470);
-  const camera = new THREE.PerspectiveCamera(62, 1, 0.3, 520);
+  scene.fog = new THREE.Fog(SKY_HOR.clone(), 90, 270);
+  const camera = new THREE.PerspectiveCamera(62, 1, 0.3, 300);
   scene.add(new THREE.HemisphereLight(0xcfe4ff, 0x727565, 1.1));
   const SUN_DIR = new THREE.Vector3(0.42, 0.78, 0.3).normalize();
   const sun = new THREE.DirectionalLight(0xfff0d0, 2.6);
@@ -292,7 +294,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   ground.receiveShadow = true;
   scene.add(ground);
   // Startplatz in der Mitte
-  const plaza = box(104, 0.06, 104, mat(0x9a9da4), 0, 0.01, 0);
+  const plaza = box(76, 0.06, 76, mat(0x9a9da4), 0, 0.01, 0);
   plaza.receiveShadow = true;
   scene.add(plaza);
 
@@ -301,10 +303,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     const dash = new THREE.BoxGeometry(0.5, 0.05, 4);
     const m = new THREE.MeshBasicMaterial({ color: 0xe8e2c0 });
     const pts: [number, number, number][] = [];
-    for (let k = -8; k <= 7; k++) {
+    for (let k = -9; k <= 8; k++) {
       const c = (k + 0.5) * CELL;
       for (let t = -WORLD; t <= WORLD; t += 10) {
-        const nearCross = Math.abs(((t % CELL) + CELL) % CELL - CELL / 2) < 20;
+        const nearCross = Math.abs(((t % CELL) + CELL) % CELL - CELL / 2) < 15.5;
         if (nearCross) continue;
         pts.push([c, t, 0]); // Strasse laeuft entlang z bei x = c
         pts.push([t, c, 1]); // Strasse laeuft entlang x bei z = c
@@ -339,23 +341,52 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     scene.add(inst);
   }
 
-  // Viele gleiche Modelle als eine InstancedMesh
+  // Viele gleiche Modelle als InstancedMesh, nach Kacheln getrennt (2 x 2 Bloecke), damit die Grafikkarte
+  // nur zeichnet, was in der Naehe der Kamera liegt (Frustum-Culling arbeitet pro Kachel).
   function instanced(prop: { geometry: THREE.BufferGeometry; material: THREE.Material }, mats: THREE.Matrix4[], shadow = false) {
     if (!mats.length) return;
-    const im = new THREE.InstancedMesh(prop.geometry, prop.material, mats.length);
-    mats.forEach((m, i) => im.setMatrixAt(i, m));
-    im.computeBoundingSphere();
-    im.castShadow = shadow;
-    im.receiveShadow = true;
-    scene.add(im);
+    const TILE = CELL * 2;
+    const tiles = new Map<string, THREE.Matrix4[]>();
+    for (const m of mats) {
+      const key = `${Math.floor(m.elements[12] / TILE)}|${Math.floor(m.elements[14] / TILE)}`;
+      const l = tiles.get(key);
+      if (l) l.push(m);
+      else tiles.set(key, [m]);
+    }
+    for (const list of tiles.values()) {
+      const im = new THREE.InstancedMesh(prop.geometry, prop.material, list.length);
+      list.forEach((m, i) => im.setMatrixAt(i, m));
+      im.computeBoundingSphere();
+      im.castShadow = shadow;
+      im.receiveShadow = true;
+      scene.add(im);
+    }
+  }
+
+  // Einfache Kiefer aus Zylinder und Kegeln (Vertexfarben), ca. 6 m hoch
+  function treeGeometry() {
+    const part = (g: THREE.BufferGeometry, color: number, y: number) => {
+      g.translate(0, y, 0);
+      const c = new THREE.Color(color);
+      const arr = new Float32Array(g.attributes.position.count * 3);
+      for (let i = 0; i < arr.length; i += 3) arr.set([c.r, c.g, c.b], i);
+      g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+      return g;
+    };
+    return mergeGeometries([
+      part(new THREE.CylinderGeometry(0.22, 0.32, 2.0, 7), 0x6b4a2e, 1.0),
+      part(new THREE.ConeGeometry(2.0, 2.6, 8), 0x2f7a46, 2.9),
+      part(new THREE.ConeGeometry(1.55, 2.4, 8), 0x37894f, 4.2),
+      part(new THREE.ConeGeometry(1.0, 2.1, 8), 0x41985a, 5.4),
+    ])!;
   }
 
   function addMap(city: City) {
     markings();
-    // Parks
+    // Parks: ein ganzer Block
     const grass = mat(0x5f9a4a);
     for (const p of city.parks) {
-      const park = box(54, 0.05, 54, grass, p.x, 0.02, p.z);
+      const park = box(29, 0.05, 29, grass, p.x, 0.02, p.z);
       park.receiveShadow = true;
       scene.add(park);
     }
@@ -363,15 +394,15 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       fallbackBuildings(city.boxes);
       return;
     }
-    // Gebaeude: eine InstancedMesh pro Modell und Kachel (3 x 3 Bloecke). So zeichnet die Grafikkarte
+    // Gebaeude: eine InstancedMesh pro Modell und Kachel (2 x 2 Bloecke). So zeichnet die Grafikkarte
     // nur die Kacheln, die im Bild liegen, und die Draw Calls bleiben niedrig.
     const mx = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const up = new THREE.Vector3(0, 1, 0);
-    const TILE = CELL * 3;
+    const TILE = CELL * 2;
     const groups = new Map<string, Box[]>();
     for (const b of city.boxes) {
-      const key = `${b.k}|${Math.floor(b.x / TILE)}|${Math.floor(b.z / TILE)}`;
+      const key = `${b.k}|${Math.floor(b.px / TILE)}|${Math.floor(b.pz / TILE)}`;
       const g = groups.get(key);
       if (g) g.push(b);
       else groups.set(key, [b]);
@@ -381,26 +412,27 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       const inst = new THREE.InstancedMesh(prop.geometry, prop.material, list.length);
       list.forEach((b, i) => {
         q.setFromAxisAngle(up, (b.rot * Math.PI) / 2);
-        mx.compose(new THREE.Vector3(b.x, 0, b.z), q, new THREE.Vector3(b.s, b.s, b.s));
+        mx.compose(new THREE.Vector3(b.px, 0, b.pz), q, new THREE.Vector3(b.s, b.s, b.s));
         inst.setMatrixAt(i, mx);
       });
       inst.computeBoundingSphere();
       inst.castShadow = inst.receiveShadow = true;
       scene.add(inst);
     }
-    const M = (x: number, y: number, z: number, rot: number, s: number) =>
+    const M = (x: number, y: number, z: number, rot: number, s = 1) =>
       new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromAxisAngle(up, rot), new THREE.Vector3(s, s, s));
-    // Strassenlaternen und Ampeln an den Kreuzungen
+    // Strassenlaternen und Ampeln an den Ecken der Kreuzungen (Arm zeigt zur Kreuzungsmitte)
     const lamps: THREE.Matrix4[] = [];
     const tls: THREE.Matrix4[][] = [[], [], []];
+    const E = 12.6;
     let n = 0;
-    for (let i = -8; i <= 7; i++) {
-      for (let j = -8; j <= 7; j++) {
+    for (let i = -9; i <= 8; i++) {
+      for (let j = -9; j <= 8; j++) {
         const cx = (i + 0.5) * CELL;
         const cz = (j + 0.5) * CELL;
-        if (Math.abs(cx) < 60 && Math.abs(cz) < 60) continue;
-        lamps.push(M(cx + 17, 0, cz + 17, -Math.PI / 4, 9));
-        tls[n % 3].push(M(cx - 17, 0, cz - 17, (3 * Math.PI) / 4, 8));
+        if (Math.abs(cx) < 40 && Math.abs(cz) < 40) continue;
+        lamps.push(M(cx + E, 0, cz + E, -Math.PI / 4));
+        if (n % 3 !== 2) tls[n % 3].push(M(cx - E, 0, cz - E, (3 * Math.PI) / 4));
         n++;
       }
     }
@@ -408,39 +440,42 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     instanced(assets.props.tlA, tls[0]);
     instanced(assets.props.tlB, tls[1]);
     instanced(assets.props.tlC, tls[2]);
-    // Buesche in den Parks
+    // Parks: Struktur aus Buschwerk, Baeumen und Baenken
     const bushes: THREE.Matrix4[] = [];
     const benches: THREE.Matrix4[] = [];
-    for (const p of city.parks) {
-      for (let k = 0; k < 12; k++) {
-        const a = k * 2.4;
-        const d = 5 + (k % 5) * 4.5;
-        const sz = 7 + (k % 3) * 2;
-        bushes.push(M(p.x + Math.cos(a) * d, 0, p.z + Math.sin(a) * d, k, sz));
+    const trees: THREE.Matrix4[] = [];
+    city.parks.forEach((p, pi) => {
+      for (let k = 0; k < 10; k++) {
+        bushes.push(M(p.x + (rnd(pi * 40 + k) - 0.5) * 25, 0, p.z + (rnd(pi * 40 + k + 17) - 0.5) * 25, k, 0.9 + rnd(k + pi) * 0.6));
       }
-      for (let k = 0; k < 4; k++) benches.push(M(p.x + (k % 2 ? 9 : -9), 0.05, p.z + (k < 2 ? -22 : 22), (k % 2 ? 1 : -1) * Math.PI / 2, 4.5));
-    }
+      for (let k = 0; k < 12; k++) {
+        trees.push(M(p.x + (rnd(pi * 50 + k + 3) - 0.5) * 24, 0, p.z + (rnd(pi * 50 + k + 29) - 0.5) * 24, rnd(k) * 6, 0.8 + rnd(pi + k * 3) * 0.6));
+      }
+      for (let k = 0; k < 4; k++) benches.push(M(p.x + (k % 2 ? 4 : -4), 0, p.z + (k < 2 ? -9 : 9), ((k % 2 ? 1 : -1) * Math.PI) / 2));
+    });
     instanced(assets.bush, bushes);
-    // Strassenmoebel vor den Gebaeuden und Wassertuerme auf manchen Daechern
-    const kinds: THREE.Matrix4[][] = [[], [], [], [], [], []];
+    instanced(assets.props.bench, benches);
+    if (trees.length) instanced({ geometry: treeGeometry(), material: new THREE.MeshLambertMaterial({ vertexColors: true }) }, trees, true);
+    // Strassenmoebel vor den Gebaeuden (nur auf den Aussenseiten der Bloecke) und Wassertuerme auf Daechern
+    const P = assets.props;
+    const kindProps = [P.hydrant, P.trash, P.bench, P.dumpster, P.boxA, P.boxB, P.barrel, P.pallet, P.crate];
+    const kinds: THREE.Matrix4[][] = kindProps.map(() => []);
     const towers: THREE.Matrix4[] = [];
     city.boxes.forEach((b, idx) => {
-      if (rnd(idx * 5 + 1) < 0.5) {
-        const side = Math.floor(rnd(idx * 5 + 2) * 4);
-        const along = (rnd(idx * 5 + 3) - 0.5) * b.s * 1.5;
-        const out = b.s + 1.4;
-        const kind = Math.floor(rnd(idx * 5 + 4) * 6);
-        const ang = (side * Math.PI) / 2;
-        const lx = side % 2 === 0 ? along : out * (side === 1 ? 1 : -1);
-        const lz = side % 2 === 0 ? out * (side === 0 ? 1 : -1) : along;
-        const sz = [4.2, 5, 4.5, 4.5, 4, 4][kind];
-        kinds[kind].push(M(b.x + lx, 0, b.z + lz, ang, sz));
+      if (rnd(idx * 5 + 1) < 0.55) {
+        const bx = Math.round(b.px / CELL) * CELL;
+        const bz = Math.round(b.pz / CELL) * CELL;
+        const sx = b.px >= bx ? 1 : -1;
+        const sz = b.pz >= bz ? 1 : -1;
+        const out = b.s + 0.7;
+        const alongA = (rnd(idx * 5 + 3) - 0.5) * b.s * 1.4;
+        const kind = Math.floor(rnd(idx * 5 + 4) * kindProps.length);
+        if (rnd(idx * 5 + 2) < 0.5) kinds[kind].push(M(b.px + alongA, 0, b.pz + sz * out, sz > 0 ? 0 : Math.PI));
+        else kinds[kind].push(M(b.px + sx * out, 0, b.pz + alongA, sx > 0 ? Math.PI / 2 : -Math.PI / 2));
       }
-      if (b.h > 25 && rnd(idx * 7 + 3) < 0.14) towers.push(M(b.x + (rnd(idx) - 0.5) * b.hw, b.h, b.z + (rnd(idx + 9) - 0.5) * b.hd, rnd(idx + 4) * 6, 7));
+      if (b.h > 12 && rnd(idx * 7 + 3) < 0.15) towers.push(M(b.x, b.h, b.z, rnd(idx + 4) * 6, 0.55));
     });
-    const P = assets.props;
-    [P.hydrant, P.trash, P.bench, P.dumpster, P.boxA, P.boxB].forEach((pp, k) => instanced(pp, kinds[k]));
-    instanced(P.bench, benches);
+    kindProps.forEach((pp, k) => instanced(pp, kinds[k]));
     instanced(P.tower, towers, true);
   }
 
@@ -651,7 +686,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       const car = assets.cars[id % assets.cars.length].clone(true);
       car.userData.wheels = [] as THREE.Object3D[];
       car.traverse((o) => {
-        if (o.name.includes('_wheel_')) car.userData.wheels.push(o);
+        if (/wheel/i.test(o.name)) car.userData.wheels.push(o);
       });
       return shadowize(car);
     }
@@ -677,7 +712,8 @@ export function createWorld(canvas: HTMLCanvasElement): World {
   function spinWheels(o: THREE.Object3D, meters: number) {
     const ws = o.userData.wheels as THREE.Object3D[] | undefined;
     if (!ws) return;
-    for (const w of ws) w.rotation.x -= meters / 0.35; // KayKit-Reifenradius ca. 0,35 m nach Skalierung
+    const radius = (o.userData.wheelR as number) || 0.35;
+    for (const w of ws) w.rotation.x -= meters / radius;
   }
 
   // Flugzeug (selbst gebaut): Rumpf, Fluegel, Leitwerk, Fahrwerk und ein drehender Propeller
@@ -732,6 +768,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     prop.add(b1, b2, disc);
     g.add(prop);
     g.userData.prop = prop;
+    g.scale.setScalar(0.75); // Spannweite ca. 8 m: passt noch zwischen die Haeuser
     spinners.add(g);
     return g;
   }
@@ -741,20 +778,125 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     return g;
   }
 
+  // ---------------------------------------------------------------- Einschusslöcher und Brandflecken
+  // Ein Ring aus Decals (eine InstancedMesh, ein Draw Call). Das Verblassen rechnet der Shader aus dem Alter.
+  const DECALS = 320;
+  const decalUniforms = { uNow: { value: 0 } };
+  const decalGeo = new THREE.PlaneGeometry(1, 1);
+  const decalT = new THREE.InstancedBufferAttribute(new Float32Array(DECALS).fill(-1e6), 1);
+  const decalL = new THREE.InstancedBufferAttribute(new Float32Array(DECALS).fill(1), 1);
+  const decalK = new THREE.InstancedBufferAttribute(new Float32Array(DECALS), 1);
+  decalGeo.setAttribute('aT', decalT);
+  decalGeo.setAttribute('aL', decalL);
+  decalGeo.setAttribute('aK', decalK);
+  const decals = new THREE.InstancedMesh(
+    decalGeo,
+    new THREE.ShaderMaterial({
+      uniforms: decalUniforms,
+      transparent: true,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -4,
+      polygonOffsetUnits: -4,
+      vertexShader: `attribute float aT; attribute float aL; attribute float aK; uniform float uNow;
+        varying vec2 vUv; varying float vA; varying float vK;
+        void main(){ vUv = uv; vK = aK; float age = (uNow - aT) / aL;
+          vA = (age < 0.0 || age > 1.0) ? 0.0 : 1.0 - smoothstep(0.5, 1.0, age);
+          gl_Position = projectionMatrix * viewMatrix * modelMatrix * instanceMatrix * vec4(position, 1.0); }`,
+      fragmentShader: `varying vec2 vUv; varying float vA; varying float vK;
+        float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+        void main(){
+          if (vA <= 0.001) discard;
+          vec2 c = vUv * 2.0 - 1.0; float d = length(c);
+          float a;
+          if (vK < 0.5) { // Einschussloch: schwarzer Kern, rauer Rand, heller Abplatzring
+            float rough = 0.78 + 0.22 * h(floor(vUv * 9.0));
+            float core = smoothstep(0.34 * rough + 0.1, 0.2, d);
+            float ring = smoothstep(1.0, 0.45, d) * 0.28;
+            a = max(core * 0.96, ring);
+          } else { // Brandfleck: weiche, ungleichmaessige Russflaeche
+            vec2 g = vUv * 6.0; vec2 i = floor(g); vec2 f = fract(g); f = f * f * (3.0 - 2.0 * f);
+            float n = mix(mix(h(i), h(i + vec2(1.0, 0.0)), f.x), mix(h(i + vec2(0.0, 1.0)), h(i + vec2(1.0, 1.0)), f.x), f.y);
+            a = smoothstep(1.0, 0.2, d * (0.75 + 0.5 * n)) * 0.5;
+          }
+          gl_FragColor = vec4(vec3(0.015), a * vA);
+        }`,
+    }),
+    DECALS,
+  );
+  decals.frustumCulled = false;
+  decals.renderOrder = 2;
+  const zero = new THREE.Matrix4().makeScale(0, 0, 0);
+  for (let i = 0; i < DECALS; i++) decals.setMatrixAt(i, zero);
+  scene.add(decals);
+  let decalNext = 0;
+  const _q = new THREE.Quaternion();
+  const _q2 = new THREE.Quaternion();
+  const _m = new THREE.Matrix4();
+  function addDecal(x: number, y: number, z: number, n: THREE.Vector3, size: number, life: number, kind: 0 | 1) {
+    const i = decalNext;
+    decalNext = (decalNext + 1) % DECALS;
+    _q.setFromUnitVectors(new THREE.Vector3(0, 0, 1), n);
+    _q2.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.random() * 6.28);
+    _q.multiply(_q2);
+    const off = kind === 0 ? 0.035 : 0.025;
+    _m.compose(new THREE.Vector3(x + n.x * off, y + n.y * off, z + n.z * off), _q, new THREE.Vector3(size, size, 1));
+    decals.setMatrixAt(i, _m);
+    decals.instanceMatrix.needsUpdate = true;
+    decalT.setX(i, performance.now() / 1000);
+    decalL.setX(i, life);
+    decalK.setX(i, kind);
+    decalT.needsUpdate = decalL.needsUpdate = decalK.needsUpdate = true;
+  }
+
+  // Oberflaechennormale am Einschlagpunkt (Boden, Dach oder Gebaeudewand)
+  let cityBoxes: Box[] = [];
+  function surfaceNormal(x: number, y: number, z: number): THREE.Vector3 {
+    if (y < 0.12) return new THREE.Vector3(0, 1, 0);
+    let best: Box | null = null;
+    let bestScore = -Infinity;
+    for (const b of cityBoxes) {
+      const dx = Math.abs(x - b.x) - b.hw;
+      const dz = Math.abs(z - b.z) - b.hd;
+      if (dx > 0.4 || dz > 0.4 || y > b.h + 0.4) continue;
+      const score = Math.max(dx, dz);
+      if (score > bestScore) {
+        bestScore = score;
+        best = b;
+      }
+    }
+    if (!best) return new THREE.Vector3(0, 1, 0);
+    if (y > best.h - 0.2) return new THREE.Vector3(0, 1, 0);
+    const dx = Math.abs(x - best.x) - best.hw;
+    const dz = Math.abs(z - best.z) - best.hd;
+    return dx > dz ? new THREE.Vector3(Math.sign(x - best.x), 0, 0) : new THREE.Vector3(0, 0, Math.sign(z - best.z));
+  }
+
   // ---------------------------------------------------------------- Effekte
   const streakMat = () => new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
   const streakGeo = new THREE.BoxGeometry(0.05, 0.05, 1);
+  let shakeAmp = 0;
 
-  function sparks(x: number, y: number, z: number) {
-    for (let i = 0; i < 7; i++) {
-      const a = Math.random() * 6.28;
-      const v = 3 + Math.random() * 7;
-      fire.emit(x, y, z, Math.cos(a) * v, 2 + Math.random() * 6, Math.sin(a) * v, 0.25 + Math.random() * 0.25, 0.22, 0.04, 1, 0.8 + Math.random() * 0.15, 0.35, 1, -22, 0.5);
+  function sparks(x: number, y: number, z: number, n: THREE.Vector3, metal = false) {
+    // Funken fliegen von der Flaeche weg, dazu ein Staubpuff
+    for (let i = 0; i < (metal ? 12 : 8); i++) {
+      const v = 3 + Math.random() * 8;
+      const sx = n.x * v + (Math.random() - 0.5) * 6;
+      const sy = n.y * v + 1 + Math.random() * 4;
+      const sz = n.z * v + (Math.random() - 0.5) * 6;
+      fire.emit(x, y, z, sx, sy, sz, 0.25 + Math.random() * 0.3, 0.18, 0.03, 1, 0.75 + Math.random() * 0.2, 0.3, 1, -20, 0.6);
     }
-    smoke.emit(x, y, z, 0, 0.8, 0, 0.7, 0.4, 1.6, 0.7, 0.7, 0.72, 0.4, 0, 1.2);
+    fire.emit(x, y, z, 0, 0, 0, 0.09, 0.9, 0.2, 1, 0.9, 0.55, 0.9); // kurzer Aufblitz
+    const g = 0.55 + Math.random() * 0.15;
+    smoke.emit(x + n.x * 0.1, y + n.y * 0.1, z + n.z * 0.1, n.x * 0.6, 0.5 + n.y * 0.6, n.z * 0.6, 0.8, 0.3, 1.3, g, g, g, 0.35, 0, 1.3);
   }
 
-  function tracer(a: number[], b: number[]) {
+  function bloodPuff(x: number, y: number, z: number) {
+    for (let i = 0; i < 5; i++) smoke.emit(x, y, z, (Math.random() - 0.5) * 3, Math.random() * 2, (Math.random() - 0.5) * 3, 0.5, 0.25, 0.7, 0.55, 0.05, 0.05, 0.6, -4, 2);
+  }
+
+  // hit: 0 = nichts getroffen, 1 = Spieler, 2 = Fahrzeug; wl = 1: Wand oder Boden getroffen
+  function tracer(a: number[], b: number[], hit = 0, wl = 0) {
     const A = new THREE.Vector3(a[0], a[1] - 0.2, a[2]);
     const B = new THREE.Vector3(b[0], b[1], b[2]);
     const len = A.distanceTo(B);
@@ -764,33 +906,64 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     const t = performance.now();
     const dur = Math.min(260, Math.max(70, (len / 320) * 1000));
     effects.push({ obj: m, until: t + dur, start: t, kind: 'tracer', a: A, b: B, len });
-    timers.push({ at: t + dur, fn: () => sparks(B.x, B.y, B.z) });
+    timers.push({
+      at: t + dur,
+      fn: () => {
+        if (wl) {
+          const n = surfaceNormal(B.x, B.y, B.z);
+          sparks(B.x, B.y, B.z, n);
+          addDecal(B.x, B.y, B.z, n, 0.24 + Math.random() * 0.1, 28, 0);
+        } else if (hit === 2) sparks(B.x, B.y, B.z, new THREE.Vector3(0, 1, 0), true);
+        else if (hit === 1) bloodPuff(B.x, B.y, B.z);
+      },
+    });
   }
 
   function boom(x: number, y: number, z: number, r: number) {
     const t = performance.now();
-    const s = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffb040, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+    const k = r / 6;
+    // Grelle Kugel im Kern, schnell vergehend
+    const s = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 10), new THREE.MeshBasicMaterial({ color: 0xffd9a0, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
     s.position.set(x, y, z);
     scene.add(s);
-    effects.push({ obj: s, until: t + 260, start: t, kind: 'boom', r });
+    effects.push({ obj: s, until: t + 200, start: t, kind: 'boom', r: r * 0.8 });
     // Druckwelle am Boden
-    const ring = new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 28), new THREE.MeshBasicMaterial({ color: 0xffe0b0, transparent: true, opacity: 0.6, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.88, 1, 32), new THREE.MeshBasicMaterial({ color: 0xffe9c8, transparent: true, opacity: 0.55, side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
     ring.rotation.x = -Math.PI / 2;
-    ring.position.set(x, Math.max(0.15, y > 3 ? 0.15 : y * 0.2), z);
+    ring.position.set(x, y > 3 ? 0.15 : Math.max(0.15, y * 0.2), z);
     scene.add(ring);
-    effects.push({ obj: ring, until: t + 500, start: t, kind: 'ring', r: r * 1.6 });
-    for (let i = 0; i < 45; i++) {
+    effects.push({ obj: ring, until: t + 520, start: t, kind: 'ring', r: r * 2.2 });
+    // Feuerball: grosse weiche Flammen, die aufsteigen
+    for (let i = 0; i < 26; i++) {
       const a = Math.random() * 6.28;
-      const e = Math.random() * 0.6 + 0.4;
-      const v = (4 + Math.random() * 9) * (r / 6);
-      fire.emit(x, y, z, Math.cos(a) * v * e, (Math.random() * 7 + 2) * (r / 6), Math.sin(a) * v * e, 0.5 + Math.random() * 0.6, 1.2 + Math.random(), 0.2, 1, 0.45 + Math.random() * 0.4, 0.1, 0.95, -6, 1.2);
+      const e = Math.random();
+      const v = (2 + Math.random() * 6) * k;
+      fire.emit(x, y, z, Math.cos(a) * v * e, (2 + Math.random() * 7) * k, Math.sin(a) * v * e, 0.55 + Math.random() * 0.55, 2.5 * k + Math.random() * 2, 0.8, 1, 0.5 + Math.random() * 0.35, 0.1 + Math.random() * 0.1, 0.9, 4, 1.4);
     }
-    for (let i = 0; i < 28; i++) {
+    // Funken und glühende Splitter
+    for (let i = 0; i < 40; i++) {
       const a = Math.random() * 6.28;
-      const v = Math.random() * 5 * (r / 6);
-      const dark = 0.18 + Math.random() * 0.15;
-      smoke.emit(x + Math.cos(a) * 1.5, y, z + Math.sin(a) * 1.5, Math.cos(a) * v, 2 + Math.random() * 4, Math.sin(a) * v, 1.6 + Math.random() * 1.4, 2.5, 8 + Math.random() * 6, dark, dark, dark + 0.02, 0.6, 0, 1.4);
+      const v = (6 + Math.random() * 16) * k;
+      fire.emit(x, y, z, Math.cos(a) * v, (3 + Math.random() * 14) * k, Math.sin(a) * v, 0.5 + Math.random() * 0.9, 0.2, 0.04, 1, 0.65 + Math.random() * 0.3, 0.2, 1, -18, 0.4);
     }
+    // Truemmer: dunkle Brocken fallen zu Boden
+    for (let i = 0; i < 22; i++) {
+      const a = Math.random() * 6.28;
+      const v = (4 + Math.random() * 12) * k;
+      smoke.emit(x, y, z, Math.cos(a) * v, (5 + Math.random() * 12) * k, Math.sin(a) * v, 1 + Math.random() * 0.8, 0.45, 0.4, 0.1, 0.09, 0.09, 1, -22, 0.15);
+    }
+    // Rauchsaeule: steigt mehrere Sekunden auf
+    for (let i = 0; i < 24; i++) {
+      const a = Math.random() * 6.28;
+      const v = Math.random() * 3.5 * k;
+      const dark = 0.2 + Math.random() * 0.18;
+      smoke.emit(x + Math.cos(a) * 1.2, y, z + Math.sin(a) * 1.2, Math.cos(a) * v, (2.5 + Math.random() * 4.5) * k, Math.sin(a) * v, 2.2 + Math.random() * 2.2, 2.5 * k, (6 + Math.random() * 5) * k, dark, dark, dark + 0.02, 0.42, 0, 0.9);
+    }
+    // Brandfleck am Boden
+    if (y < 6) addDecal(x, 0.02, z, new THREE.Vector3(0, 1, 0), r * 1.7, 55, 1);
+    // Kamerawackeln je nach Entfernung
+    const d = Math.hypot(camera.position.x - x, camera.position.y - y, camera.position.z - z);
+    shakeAmp = Math.max(shakeAmp, Math.max(0, 1 - d / (45 * k)) * 0.9 * Math.min(1.5, k));
   }
 
   function dust(x: number, z: number, speed: number) {
@@ -798,17 +971,61 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     smoke.emit(x + a, 0.25, z + (Math.random() - 0.5) * 2, a * 0.5, 0.6, 0, 0.9, 0.5, 2.2 + speed * 0.05, 0.62, 0.6, 0.55, 0.2, 0, 1.2);
   }
 
+  // Fahrzeugschaden: ab halber Gesundheit raucht es, bei wenig Leben qualmt es dunkel mit Flammen,
+  // bei 0 Leben brennt es lichterloh, bis es nach einigen Sekunden explodiert.
+  const _v = new THREE.Vector3();
+  function vehicleFx(o: THREE.Object3D, kind: number, hpRatio: number, burning: boolean, dt: number) {
+    const stage = burning ? 3 : hpRatio < 0.25 ? 2 : hpRatio < 0.5 ? 1 : 0;
+    let glowSp = o.userData.glow as THREE.Sprite | undefined;
+    if (stage === 0) {
+      if (glowSp) glowSp.visible = false;
+      return;
+    }
+    const rate = [0, 9, 20, 55][stage];
+    o.userData.fxAcc = (o.userData.fxAcc ?? 0) + rate * dt;
+    // Motorraum: Auto vorn, Flugzeug an der Nase
+    const local = kind === 2 ? _v.set(0, 1.45, -2.2) : _v.set(0, 1.05, -1.5);
+    const wp = o.localToWorld(local.clone());
+    while (o.userData.fxAcc >= 1) {
+      o.userData.fxAcc -= 1;
+      const j = () => (Math.random() - 0.5) * 1.6;
+      if (stage === 1) {
+        const g = 0.5 + Math.random() * 0.15;
+        smoke.emit(wp.x + j() * 0.3, wp.y, wp.z + j() * 0.3, j() * 0.4, 1.6 + Math.random(), j() * 0.4, 1.4, 0.5, 2.2, g, g, g, 0.32, 0, 0.6);
+      } else {
+        const dark = stage === 3 ? 0.07 + Math.random() * 0.08 : 0.15 + Math.random() * 0.12;
+        smoke.emit(wp.x + j() * 0.4, wp.y + 0.2, wp.z + j() * 0.4, j() * 0.6, 2.4 + Math.random() * 2, j() * 0.6, 2.2 + Math.random(), 0.7, stage === 3 ? 4.5 : 3, dark, dark, dark, 0.4, 0, 0.5);
+        if (stage >= 2 && Math.random() < (stage === 3 ? 0.95 : 0.4)) {
+          fire.emit(wp.x + j() * 0.6, wp.y + 0.1, wp.z + j() * 0.6, j() * 0.5, 1.5 + Math.random() * 2.4, j() * 0.5, 0.45 + Math.random() * 0.3, stage === 3 ? 1.7 : 1.0, 0.2, 1, 0.45 + Math.random() * 0.35, 0.08, 0.9, 1, 0.8);
+        }
+      }
+    }
+    if (stage >= 2) {
+      if (!glowSp) {
+        glowSp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false }));
+        glowSp.position.copy(kind === 2 ? new THREE.Vector3(0, 1.5, -1.5) : new THREE.Vector3(0, 1.2, -1.0));
+        o.add(glowSp);
+        o.userData.glow = glowSp;
+      }
+      glowSp.visible = true;
+      const f = (stage === 3 ? 6 : 3) * (0.85 + Math.random() * 0.3);
+      glowSp.scale.set(f, f, 1);
+    }
+  }
+
   function update(nowMs: number, dt: number) {
     for (const m of mixers) m.update(dt);
     skyUniforms.uTime.value = nowMs / 1000;
+    decalUniforms.uNow.value = performance.now() / 1000;
     for (const o of spinners) {
       const p = o.userData.prop as THREE.Object3D;
       p.rotation.z += dt * (o.userData.spin ?? 38);
     }
     for (let i = timers.length - 1; i >= 0; i--) {
       if (nowMs >= timers[i].at) {
-        timers[i].fn();
+        const fn = timers[i].fn;
         timers.splice(i, 1);
+        fn();
       }
     }
     for (let i = effects.length - 1; i >= 0; i--) {
@@ -821,21 +1038,21 @@ export function createWorld(canvas: HTMLCanvasElement): World {
         (mesh.material as THREE.Material).dispose();
         effects.splice(i, 1);
       } else if (e.kind === 'boom') {
-        e.obj.scale.setScalar((e.r ?? 6) * (0.25 + k * 0.55));
-        ((e.obj as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = 0.9 * (1 - k) * (1 - k);
+        e.obj.scale.setScalar((e.r ?? 6) * (0.2 + k * 0.9));
+        ((e.obj as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = (1 - k) * (1 - k);
       } else if (e.kind === 'ring') {
-        e.obj.scale.setScalar((e.r ?? 6) * (0.2 + k * 0.8));
-        ((e.obj as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = 0.6 * (1 - k);
+        e.obj.scale.setScalar((e.r ?? 6) * (0.15 + k * 0.85));
+        ((e.obj as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = 0.55 * (1 - k);
       } else if (e.kind === 'tracer' && e.a && e.b && e.len) {
         // Leuchtspur: ein kurzes Stueck, das vom Lauf zum Ziel fliegt
         const tail = 7;
         const head = Math.min(e.len, k * (e.len + tail));
-        const back = Math.max(0, head - tail);
+        const back = Math.max(2.5, head - tail); // die ersten Meter vor der Kamera bleiben frei
         const dir = e.b.clone().sub(e.a).normalize();
         const mid = e.a.clone().addScaledVector(dir, (head + back) / 2);
         e.obj.position.copy(mid);
         e.obj.lookAt(mid.clone().add(dir));
-        e.obj.scale.set(1, 1, Math.max(0.01, head - back));
+        e.obj.scale.set(1, 1, Math.max(0.001, head - back));
         ((e.obj as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = 1 - k * 0.6;
       }
     }
@@ -845,6 +1062,12 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     fire.update(dt);
     smoke.update(dt);
     skyDome.position.copy(camera.position);
+    if (shakeAmp > 0.003) {
+      camera.position.x += (Math.random() - 0.5) * shakeAmp;
+      camera.position.y += (Math.random() - 0.5) * shakeAmp;
+      camera.position.z += (Math.random() - 0.5) * shakeAmp;
+      shakeAmp *= Math.exp(-5 * dt);
+    } else shakeAmp = 0;
     autoQuality(dt);
   }
 
@@ -894,7 +1117,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     setAssets: (a) => {
       assets = a;
     },
-    addMap,
+    addMap: (c) => {
+      cityBoxes = c.boxes;
+      addMap(c);
+    },
     makePlayer,
     animatePlayer,
     playerFired,
@@ -904,6 +1130,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     makePlane,
     makeRocket,
     tracer,
+    vehicleFx,
     boom,
     update,
     resize,

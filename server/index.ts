@@ -57,6 +57,8 @@ interface Vehicle {
   driver: number | null;
   hp: number;
   emptySince: number;
+  burnUntil: number; // > 0: Fahrzeug brennt und explodiert zu diesem Zeitpunkt
+  burnBy: number | null;
 }
 interface Proj {
   id: number;
@@ -164,6 +166,19 @@ function damagePlayer(p: Player, dmg: number, by: number | null) {
   }
 }
 
+const BURN_TIME = 3.8; // so lange brennt ein Fahrzeug, bevor es explodiert
+
+// Schaden an einem Fahrzeug: bei 0 Leben faengt es erst Feuer und explodiert kurz danach
+function damageVehicle(v: Vehicle, dmg: number, by: number | null) {
+  if (v.burnUntil > 0) return;
+  v.hp -= dmg;
+  if (v.hp <= 0) {
+    v.hp = 1;
+    v.burnUntil = now() + BURN_TIME;
+    v.burnBy = by;
+  }
+}
+
 function destroyVehicle(v: Vehicle, by: number | null) {
   if (!vehicles.delete(v.id)) return;
   if (v.driver !== null) {
@@ -188,8 +203,7 @@ function explode(x: number, y: number, z: number, radius: number, dmg: number, b
   for (const v of [...vehicles.values()]) {
     const d = Math.hypot(v.body.x - x, v.body.y + 1 - y, v.body.z - z);
     if (d < radius) {
-      v.hp -= dmg * 1.5 * (1 - d / radius);
-      if (v.hp <= 0) destroyVehicle(v, by);
+      damageVehicle(v, dmg * 1.5 * (1 - d / radius), by);
     }
   }
 }
@@ -229,6 +243,7 @@ function fire(p: Player, aimYaw: number, aimPitch: number) {
     return;
   }
   let wall = w.range;
+  if (d[1] < -0.001) wall = Math.min(wall, o[1] / -d[1]); // Boden
   for (const b of boxes) {
     const tt = rayBox(o, d, b);
     if (tt < wall) wall = tt;
@@ -260,8 +275,7 @@ function fire(p: Player, aimYaw: number, aimPitch: number) {
   }
   if (hitP) damagePlayer(hitP, w.dmg, p.id);
   else if (hitV) {
-    hitV.hp -= w.dmg * 2;
-    if (hitV.hp <= 0) destroyVehicle(hitV, p.id);
+    damageVehicle(hitV, w.dmg * 2, p.id);
   }
   events.push({
     k: 'shot',
@@ -269,7 +283,8 @@ function fire(p: Player, aimYaw: number, aimPitch: number) {
     a: o.map(r2),
     b: o.map((v, i) => r2(v + d[i] * Math.min(best, 150))),
     w: veh ? 3 : p.weapon,
-    hit: hitP ? 1 : 0,
+    hit: hitP ? 1 : hitV ? 2 : 0,
+    wl: !hitP && !hitV && wall < w.range ? 1 : 0, // Treffer an Gebaeude oder Boden: Einschussloch
   });
 }
 
@@ -278,7 +293,7 @@ function enter(p: Player) {
   let best: Vehicle | null = null;
   let bd = Infinity;
   for (const v of vehicles.values()) {
-    if (v.driver !== null) continue;
+    if (v.driver !== null || v.burnUntil > 0) continue;
     const d = Math.hypot(v.body.x - p.body.x, v.body.z - p.body.z);
     const reach = v.kind === PLANE ? 11 : 8;
     if (d < reach && d < bd) {
@@ -387,6 +402,8 @@ function spawnVehicle(p: Player, kind: 1 | 2) {
     driver: null,
     hp: kind === PLANE ? 200 : 300,
     emptySince: t,
+    burnUntil: 0,
+    burnBy: null,
   });
   if (kind === PLANE && Math.hypot(spot.x - p.body.x, spot.z - p.body.z) > 70) {
     say(p, 'Flugzeug steht am Flugplatz (Strasse nach Osten)');
@@ -487,6 +504,16 @@ function tick() {
       if (t - v.emptySince > 90) vehicles.delete(v.id);
     }
   }
+  // Brennende Fahrzeuge: Insassen nehmen Schaden, nach der Brenndauer knallt es
+  for (const v of [...vehicles.values()]) {
+    if (v.burnUntil <= 0) continue;
+    if (t >= v.burnUntil) {
+      destroyVehicle(v, v.burnBy);
+      continue;
+    }
+    const d = v.driver !== null ? players.get(v.driver) : undefined;
+    if (d) damagePlayer(d, 14 * (1 / TICK_HZ), v.burnBy);
+  }
   // Respawn
   for (const p of players.values()) if (p.hp <= 0 && t >= p.deadUntil) respawn(p);
 
@@ -518,6 +545,7 @@ function tick() {
     p: r2(v.body.pitch),
     r: r2(v.body.roll),
     hp: Math.round(v.hp),
+    b: v.burnUntil > 0 ? 1 : 0,
     d: v.driver ?? 0,
     o: v.owner,
   }));
