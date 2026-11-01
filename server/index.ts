@@ -3,6 +3,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Box, WORLD, RUNWAY, buildMap, distToBoxes } from '../shared/map';
@@ -555,7 +556,8 @@ function tick() {
 
 // ---------- HTTP (liefert den gebauten Client aus) und WebSocket ----------
 const here = path.dirname(fileURLToPath(import.meta.url));
-const DIST = path.resolve(here, '../dist');
+// Der Client liegt neben der Server-Datei in public/ (siehe scripts/build.mjs)
+const DIST = path.resolve(here, 'public');
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -577,7 +579,7 @@ const server = http.createServer((req, res) => {
   const file = path.normalize(path.join(DIST, rel));
   if (!file.startsWith(DIST) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-    return void res.end(fs.existsSync(DIST) ? 'Nicht gefunden' : 'Client nicht gebaut: erst "npm run build" ausfuehren');
+    return void res.end(fs.existsSync(DIST) ? 'Nicht gefunden' : 'Client fehlt: erst "npm run build" ausfuehren');
   }
   res.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream' });
   fs.createReadStream(file).pipe(res);
@@ -653,4 +655,12 @@ wss.on('connection', (ws) => {
 setInterval(tick, 1000 / TICK_HZ);
 server.listen(PORT, () => {
   console.log(`Server laeuft auf http://localhost:${PORT} (Raumcode: ${ROOM_CODE || 'keiner'}, max ${MAX_PLAYERS} Spieler)`);
+  // Adressen im WLAN anzeigen. Auf manchen Android-Geraeten (Termux) schlaegt das fehl, dann einfach ueberspringen.
+  try {
+    for (const list of Object.values(os.networkInterfaces())) {
+      for (const a of list ?? []) if (a.family === 'IPv4' && !a.internal) console.log(`  im WLAN erreichbar: http://${a.address}:${PORT}`);
+    }
+  } catch {
+    console.log('  (WLAN-Adresse nicht ermittelbar: in Termux "ip addr" oder "ifconfig" nutzen)');
+  }
 });

@@ -1,4 +1,5 @@
 // Die Karte wird aus einem Seed erzeugt, damit Server und Client exakt dieselben Gebaeude kennen.
+// Gebaeude sind KayKit-"City Builder Bits" (CC0). Der Server braucht nur die Kollisionsboxen.
 
 export interface Box {
   x: number; // Mittelpunkt
@@ -6,12 +7,19 @@ export interface Box {
   hw: number; // halbe Breite (x)
   hd: number; // halbe Tiefe (z)
   h: number; // Hoehe
+  k: number; // Gebaeudetyp 0..7 (building_A bis building_H), nur fuer die Darstellung
+  rot: number; // Drehung in Viertelkreisen, nur fuer die Darstellung
+  s: number; // Massstab des Modells, nur fuer die Darstellung
 }
 
 export const WORLD = 480; // halbe Kantenlaenge der Spielwelt in Metern
 export const CELL = 64;
 // Flugplatz: freie Strasse entlang der x-Achse bei z = 0
 export const RUNWAY = { x0: 70, x1: 450, z: 0, halfWidth: 12 };
+
+// Hoehe der Modelle building_A..H bei Massstab 1 (Grundflaeche 2 x 2)
+export const BUILDING_H = [1.65, 1.65, 2.98, 2.97, 2.35, 2.35, 2.98, 3.05];
+export const BUILDING_NAMES = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
 function mulberry32(seed: number) {
   let a = seed | 0;
@@ -23,9 +31,15 @@ function mulberry32(seed: number) {
   };
 }
 
-export function buildMap(seed = 1337): Box[] {
+export interface City {
+  boxes: Box[];
+  parks: { x: number; z: number }[];
+}
+
+export function buildCity(seed = 1337): City {
   const r = mulberry32(seed);
-  const out: Box[] = [];
+  const boxes: Box[] = [];
+  const parks: { x: number; z: number }[] = [];
   for (let i = -7; i <= 7; i++) {
     for (let j = -7; j <= 7; j++) {
       const cx = i * CELL;
@@ -35,20 +49,30 @@ export function buildMap(seed = 1337): Box[] {
       // Flugplatz-Strasse bleibt frei
       if (j === 0 && cx >= RUNWAY.x0 - CELL / 2 && cx <= RUNWAY.x1 + CELL / 2) continue;
       if (r() < 0.12) {
-        r();
-        r();
-        r();
-        r();
-        r();
-        continue; // Park
+        parks.push({ x: cx, z: cz });
+        continue;
       }
-      const w = 18 + r() * 16;
-      const d = 18 + r() * 16;
-      const h = 6 + r() * r() * 40 + (r() < 0.1 ? 30 : 0);
-      out.push({ x: cx + (r() - 0.5) * 6, z: cz + (r() - 0.5) * 6, hw: w / 2, hd: d / 2, h });
+      const k = Math.floor(r() * 8);
+      const s = 12 + r() * 3;
+      const rot = Math.floor(r() * 4);
+      const half = 0.86 * s; // Kollisionsbox etwas kleiner als der Gehweg-Sockel
+      boxes.push({
+        x: cx + (r() - 0.5) * 4,
+        z: cz + (r() - 0.5) * 4,
+        hw: half,
+        hd: half,
+        h: BUILDING_H[k] * s,
+        k,
+        rot,
+        s,
+      });
     }
   }
-  return out;
+  return { boxes, parks };
+}
+
+export function buildMap(seed = 1337): Box[] {
+  return buildCity(seed).boxes;
 }
 
 // Abstand von einem Punkt (x,z) zum naechsten Gebaeude (0, wenn innen)

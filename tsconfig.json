@@ -11,5 +11,5 @@
     "esModuleInterop": true,
     "resolveJsonModule": true
   },
-  "include": ["client/src", "server", "shared", "scripts", "vite.config.ts"]
+  "include": ["client/src", "server", "shared", "scripts/smoke.ts"]
 }
