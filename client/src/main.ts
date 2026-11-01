@@ -345,14 +345,19 @@ function syncObjects(rt: number, alpha: number, dt: number) {
       objs.pl.set(p.i, o);
     }
     const s = interp('pl', p.i, rt) ?? p;
-    o.visible = p.hp > 0 && p.v === 0;
-    const spd = Math.hypot(s.x - (o.userData.px ?? s.x), s.z - (o.userData.pz ?? s.z)) / Math.max(dt, 0.001);
+    if (p.hp <= 0) o.userData.deadAt ??= performance.now();
+    else o.userData.deadAt = undefined;
+    // Gefallene bleiben noch 3 Sekunden liegen, dann verschwinden sie
+    o.visible = p.v === 0 && (p.hp > 0 || performance.now() - o.userData.deadAt < 3000);
+    const d = Math.max(dt, 0.001);
+    const vx = (s.x - (o.userData.px ?? s.x)) / d;
+    const vz = (s.z - (o.userData.pz ?? s.z)) / d;
     o.userData.px = s.x;
     o.userData.pz = s.z;
-    o.userData.spd = (o.userData.spd ?? 0) * 0.7 + spd * 0.3;
+    o.userData.vx = (o.userData.vx ?? 0) * 0.75 + vx * 0.25;
+    o.userData.vz = (o.userData.vz ?? 0) * 0.75 + vz * 0.25;
     o.position.set(s.x, s.y, s.z);
-    o.rotation.y = s.yaw;
-    world.animatePlayer(o, { speed: o.userData.spd, dead: p.hp <= 0 });
+    world.animatePlayer(o, { vx: o.userData.vx, vz: o.userData.vz, yaw: s.yaw, dead: p.hp <= 0, dt });
   }
   // Eigene Figur
   const me = last.pl.get(myId);
@@ -361,10 +366,12 @@ function syncObjects(rt: number, alpha: number, dt: number) {
     world.scene.add(myMesh);
   }
   if (myMesh) {
-    myMesh.visible = hp > 0 && myVeh === 0;
+    if (hp <= 0) myMesh.userData.deadAt ??= performance.now();
+    else myMesh.userData.deadAt = undefined;
+    myMesh.visible = myVeh === 0 && (hp > 0 || performance.now() - myMesh.userData.deadAt < 3000);
     myMesh.position.set(lerp(prev.x, body.x, alpha), 0, lerp(prev.z, body.z, alpha));
-    myMesh.rotation.y = ctl.yaw;
-    world.animatePlayer(myMesh, { speed: body.mode === FOOT ? body.speed : 0, dead: hp <= 0 });
+    const on = body.mode === FOOT && hp > 0;
+    world.animatePlayer(myMesh, { vx: on ? (body.x - prev.x) / DT : 0, vz: on ? (body.z - prev.z) / DT : 0, yaw: ctl.yaw, dead: hp <= 0, dt });
   }
   // Fahrzeuge
   for (const [id, o] of objs.ve) {
@@ -402,6 +409,8 @@ function syncObjects(rt: number, alpha: number, dt: number) {
       const mvx = vx - (o.userData.lx ?? vx);
       const mvz = vz - (o.userData.lz ?? vz);
       world.spinWheels(o, mvx * -Math.sin(vyaw) + mvz * -Math.cos(vyaw));
+      const sp = Math.hypot(mvx, mvz) / Math.max(dt, 0.001);
+      if (sp > 7 && Math.random() < 0.5) world.dust(vx + Math.sin(vyaw) * 2, vz + Math.cos(vyaw) * 2, sp);
       o.userData.lx = vx;
       o.userData.lz = vz;
     }
@@ -440,30 +449,44 @@ function updateCamera(alpha: number, dt: number) {
   const pz = lerp(prev.z, body.z, alpha);
   const k = 1 - Math.exp(-6 * dt);
   if (body.mode === FOOT) {
+    c.fov = 60;
+    c.updateProjectionMatrix();
     const cp = Math.cos(ctl.pitch);
     const dx = -Math.sin(ctl.yaw) * cp;
     const dy = Math.sin(ctl.pitch);
     const dz = -Math.cos(ctl.yaw) * cp;
     const rx = Math.cos(ctl.yaw);
     const rz = -Math.sin(ctl.yaw);
-    const ex = px + rx * 0.7;
-    const ey = py + 1.6;
-    const ez = pz + rz * 0.7;
-    c.position.set(ex - dx * 5.2, Math.max(0.5, ey - dy * 5.2 + 0.4), ez - dz * 5.2);
-    c.lookAt(ex + dx * 30, ey + dy * 30, ez + dz * 30);
+    const ex = px + rx * 0.75;
+    const ey = py + 1.55;
+    const ez = pz + rz * 0.75;
+    // Kamera dicht hinter der Figur; stoesst sie an eine Wand, rueckt sie heran
+    let dist = 3.7;
+    for (; dist > 1.0; dist -= 0.35) {
+      const cx = ex - dx * dist;
+      const cy = Math.max(0.5, ey - dy * dist + 0.25);
+      const cz = ez - dz * dist;
+      if (!boxes.some((b) => Math.abs(cx - b.x) < b.hw + 0.4 && Math.abs(cz - b.z) < b.hd + 0.4 && cy < b.h)) break;
+    }
+    c.position.set(ex - dx * dist, Math.max(0.5, ey - dy * dist + 0.25), ez - dz * dist);
+    c.lookAt(ex + dx * 30, ey + dy * 30 + 0.1, ez + dz * 30);
     cam.yaw = ctl.yaw;
   } else if (body.mode === CAR) {
+    c.fov = 66;
+    c.updateProjectionMatrix();
     cam.yaw = lerpAng(cam.yaw, body.yaw, k);
-    c.position.set(px + Math.sin(cam.yaw) * 9, py + 4.2, pz + Math.cos(cam.yaw) * 9);
-    c.lookAt(px - Math.sin(cam.yaw) * 6, py + 1.5, pz - Math.cos(cam.yaw) * 6);
+    c.position.set(px + Math.sin(cam.yaw) * 7.2, py + 3.4, pz + Math.cos(cam.yaw) * 7.2);
+    c.lookAt(px - Math.sin(cam.yaw) * 5, py + 1.3, pz - Math.cos(cam.yaw) * 5);
   } else {
+    c.fov = 70;
+    c.updateProjectionMatrix();
     cam.yaw = lerpAng(cam.yaw, body.yaw, k);
     cam.pitch = lerp(cam.pitch, body.pitch * 0.6, k);
     const cp = Math.cos(cam.pitch);
     const dx = -Math.sin(cam.yaw) * cp;
     const dy = Math.sin(cam.pitch);
     const dz = -Math.cos(cam.yaw) * cp;
-    c.position.set(px - dx * 17, Math.max(1, py - dy * 17 + 4.5), pz - dz * 17);
+    c.position.set(px - dx * 14, Math.max(1, py - dy * 14 + 3.8), pz - dz * 14);
     c.lookAt(px + dx * 25, py + dy * 25 + 1, pz + dz * 25);
   }
 }
@@ -484,6 +507,7 @@ function frame(now: number) {
   const alpha = Math.min(1, acc / DT);
   syncObjects(now - 100, alpha, dt);
   updateCamera(alpha, dt);
+  world.focus(world.camera.position.x * 0.5 + lerp(prev.x, body.x, alpha) * 0.5, 0, world.camera.position.z * 0.5 + lerp(prev.z, body.z, alpha) * 0.5);
   world.update(now, dt);
   world.renderer.render(world.scene, world.camera);
   updateHud(now);
@@ -546,4 +570,4 @@ setInterval(() => send({ t: 'ping', c: performance.now() }), 2000);
 requestAnimationFrame(frame);
 
 // Fuer Tests und Debugging in der Konsole
-(window as any).__game = { ctl, get info() { return { ...world.renderer.info.render, calls: world.renderer.info.render.calls, geometries: world.renderer.info.memory.geometries, textures: world.renderer.info.memory.textures }; }, get body() { return body; }, get hp() { return hp; }, get snaps() { return snaps.length; }, WORLD };
+(window as any).__game = { ctl, world,  get info() { return { ...world.renderer.info.render, calls: world.renderer.info.render.calls, geometries: world.renderer.info.memory.geometries, textures: world.renderer.info.memory.textures }; }, get body() { return body; }, get hp() { return hp; }, get snaps() { return snaps.length; }, WORLD };

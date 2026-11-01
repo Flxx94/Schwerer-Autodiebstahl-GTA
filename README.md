@@ -114,10 +114,15 @@ weicht der Client ab, wird er korrigiert. Andere Spieler werden mit 100 ms Puffe
 
 Die Modelle stammen von **Kay Lousberg (KayKit)**, Lizenz CC0 (frei nutzbar, Nennung freiwillig):
 
-- [KayKit City Builder Bits 1.0](https://kaylousberg.itch.io/city-builder-bits): Gebäude, Autos, Laternen, Büsche
+- [KayKit City Builder Bits 1.0](https://kaylousberg.itch.io/city-builder-bits): Gebäude, Autos, Laternen, Ampeln, Bänke, Hydranten, Container, Wassertürme, Büsche
 - [KayKit Adventurers 1.0](https://kaylousberg.itch.io/kaykit-adventurers): Figuren „Rogue“ und „Rogue Hooded“ mit Animationen
 
 Die Dateien liegen unter `client/public/assets/` (mit den Original-Lizenzdateien). Das Flugzeug ist selbst gebaut.
+
+Eigene Effekte (kein Fremdmaterial): Himmel-Shader mit Wolken, weiche Schatten, Leuchtspuren, Mündungsfeuer, Funken,
+Explosionen mit Rauch und Staub hinter schnellen Autos. Die Figuren zielen mit dem Oberkörper, während die Beine
+weiterlaufen. Ist das Tablet zu langsam, schaltet das Spiel nach wenigen Sekunden selbst Schatten und Auflösung herunter.
+Mit `?q=low` oder `?q=high` an der Adresse legst du die Stufe fest.
 Fehlen die Modelle oder lassen sie sich nicht laden, zeigt das Spiel einfache Klötze statt der Stadt.
 
 Das Projekt selbst steht unter der GNU General Public License v3 (siehe `LICENSE`). Eingesetzte Bibliotheken:

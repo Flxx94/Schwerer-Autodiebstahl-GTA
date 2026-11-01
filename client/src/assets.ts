@@ -14,6 +14,7 @@ export interface Assets {
   cars: THREE.Object3D[]; // fertig skalierte Vorlagen (Laenge ca. 4,6 m, Front zeigt nach -z)
   streetlight: Prop;
   bush: Prop;
+  props: Record<'hydrant' | 'trash' | 'bench' | 'dumpster' | 'boxA' | 'boxB' | 'tlA' | 'tlB' | 'tlC' | 'tower', Prop>;
   chars: { scene: THREE.Object3D; clips: THREE.AnimationClip[] }[];
 }
 
@@ -41,13 +42,15 @@ export async function loadAssets(base = 'assets/'): Promise<Assets | null> {
     const loader = new GLTFLoader();
     const load = (p: string) => loader.loadAsync(base + p);
 
-    const [bGltf, cGltf, lamp, bush, rogue, hooded] = await Promise.all([
+    const propNames = ['firehydrant', 'trash_A', 'bench', 'dumpster', 'box_A', 'box_B', 'trafficlight_A', 'trafficlight_B', 'trafficlight_C', 'watertower'];
+    const [bGltf, cGltf, lamp, bush, rogue, hooded, pGltf] = await Promise.all([
       Promise.all(BUILDING_NAMES.map((n) => load(`city/building_${n}.gltf`))),
       Promise.all(CAR_NAMES.map((n) => load(`city/${n}.gltf`))),
       load('city/streetlight.gltf'),
       load('city/bush.gltf'),
       load('chars/Rogue.glb'),
       load('chars/Rogue_Hooded.glb'),
+      Promise.all(propNames.map((n) => load(`city/${n}.gltf`))),
     ]);
 
     const toProp = (g: { scene: THREE.Group }): Prop => {
@@ -86,7 +89,9 @@ export async function loadAssets(base = 'assets/'): Promise<Assets | null> {
       return { scene, clips: g.animations };
     });
 
-    return { buildings: bGltf.map(toProp), cars, streetlight: toProp(lamp), bush: toProp(bush), chars };
+    const pr = pGltf.map(toProp);
+    const props = { hydrant: pr[0], trash: pr[1], bench: pr[2], dumpster: pr[3], boxA: pr[4], boxB: pr[5], tlA: pr[6], tlB: pr[7], tlC: pr[8], tower: pr[9] };
+    return { buildings: bGltf.map(toProp), cars, streetlight: toProp(lamp), bush: toProp(bush), props, chars };
   } catch (e) {
     console.warn('KayKit-Assets konnten nicht geladen werden, nutze einfache Modelle', e);
     return null;
