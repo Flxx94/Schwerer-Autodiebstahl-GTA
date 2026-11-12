@@ -12,6 +12,7 @@ export interface PlayerAnimState {
   yaw: number; // Blickrichtung (Zielrichtung)
   dead: boolean;
   dt: number;
+  weapon: number; // 0 = Pistole, 1 = Sturmgewehr, 2 = RPG
 }
 
 export interface World {
@@ -25,12 +26,14 @@ export interface World {
   focus(x: number, y: number, z: number): void;
   dust(x: number, z: number, speed: number): void;
   info(): { quality: string; fps: number };
-  playerFired(o: THREE.Object3D): void;
+  playerFired(o: THREE.Object3D, weapon: number): void;
+  playerReload(o: THREE.Object3D, dur: number, weapon: number): void;
+  makeProjectile(kind: number): THREE.Object3D;
+  projectileFx(o: THREE.Object3D, kind: number, dt: number): void;
   disposeObject(o: THREE.Object3D): void;
   makeCar(hue: number, id: number): THREE.Object3D;
   spinWheels(o: THREE.Object3D, meters: number): void;
   makePlane(hue: number): THREE.Object3D;
-  makeRocket(): THREE.Mesh;
   tracer(a: number[], b: number[], hit?: number, wl?: number): void;
   vehicleFx(o: THREE.Object3D, kind: number, hpRatio: number, burning: boolean, dt: number): void;
   boom(x: number, y: number, z: number, r: number): void;
@@ -48,20 +51,27 @@ const box = (w: number, h: number, d: number, m: THREE.Material, x = 0, y = 0, z
 interface PlayerAnim {
   mixer: THREE.AnimationMixer;
   holder: THREE.Group;
-  flash: THREE.Sprite;
   // Fuer jede Fortbewegungsart: Beine (ganzer Koerper ohne Oberkoerper) und Oberkoerper getrennt,
   // damit der Oberkoerper beim Schiessen zielen kann, waehrend die Beine weiterlaufen.
   lower: THREE.AnimationAction[];
   upper: THREE.AnimationAction[];
-  aim: THREE.AnimationAction;
+  // Oberkoerper-Ebenen: 0 Zielen 1H, 1 Schiessen 1H, 2 Zielen 2H, 3 Schiessen 2H, 4 Nachladen 1H, 5 Nachladen 2H
+  layers: THREE.AnimationAction[];
+  lw: number[]; // geglaettete Gewichte der Ebenen
   death: THREE.AnimationAction;
   w: number[]; // geglaettete Gewichte: Idle, Vor, Links, Rechts, Zurueck
-  aimW: number;
   deadW: number;
   dead: boolean;
   yaw: number;
+  weapons: THREE.Group[]; // Pistole, Sturmgewehr, RPG (in der Hand)
+  flashes: THREE.Sprite[];
+  rear: THREE.Object3D; // Heck des RPG fuer den Rueckstoss-Feuerstrahl
+  warhead: THREE.Object3D;
+  weapon: number;
   fireUntil: number;
   flashUntil: number;
+  reloadUntil: number;
+  unloadedUntil: number;
 }
 
 // Knochen des Oberkoerpers (Namen so, wie der GLTF-Loader sie nach dem Bereinigen nennt)
@@ -557,32 +567,69 @@ export function createWorld(canvas: HTMLCanvasElement): World {
         lower.push(lo);
         upper.push(up);
       }
-      const aim = mixer.clipAction(splitFor(a.clips, '1H_Ranged_Shoot').upper);
-      aim.play().setEffectiveWeight(0);
+      // Oberkoerper-Ebenen fuer Zielen, Schiessen und Nachladen (ein- und zweihaendig)
+      const layerClips = ['1H_Ranged_Aiming', '1H_Ranged_Shoot', '2H_Ranged_Aiming', '2H_Ranged_Shoot', '1H_Ranged_Reload', '2H_Ranged_Reload'];
+      const layers = layerClips.map((n, i) => {
+        const act = mixer.clipAction(splitFor(a.clips, n).upper);
+        if (i >= 4) {
+          act.setLoop(THREE.LoopOnce, 1);
+          act.clampWhenFinished = true;
+        }
+        act.play().setEffectiveWeight(0);
+        return act;
+      });
       const death = mixer.clipAction(THREE.AnimationClip.findByName(a.clips, 'Death_A') ?? a.clips[0]);
       death.setLoop(THREE.LoopOnce, 1);
       death.clampWhenFinished = true;
       death.setEffectiveWeight(0);
-      // Muendungsfeuer vor der Waffenhand (haengt am Koerper, dreht sich mit)
-      const flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false }));
-      flash.position.set(0.32, 1.28, -1.4);
-      flash.visible = false;
-      holder.add(flash);
+      // Waffen sitzen an der rechten Hand (Knochen "handslotr"), gleiche Lage wie die Armbrust des Modells
+      model.updateWorldMatrix(true, true);
+      const hand = model.getObjectByName('handslotr') ?? holder;
+      const ws = new THREE.Vector3(1, 1, 1);
+      hand.getWorldScale(ws);
+      const mount = new THREE.Group();
+      mount.rotation.y = Math.PI / 2;
+      mount.position.set(-0.105, -0.01, 0);
+      mount.scale.setScalar(1 / (ws.x || 1));
+      hand.add(mount);
+      const weapons: THREE.Group[] = [];
+      const flashes: THREE.Sprite[] = [];
+      const parts = weaponModels();
+      parts.forEach((w, i) => {
+        const g = w.group.clone(true);
+        g.visible = i === 0;
+        g.scale.setScalar([2.2, 1.7, 1.5][i]);
+        g.position.z = [0.02, 0.12, 0.45][i];
+        mount.add(g);
+        weapons.push(g);
+        const flash = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false }));
+        flash.position.set(0, 0, w.muzzle);
+        flash.visible = false;
+        g.add(flash);
+        flashes.push(flash);
+      });
+      const rpg = weapons[2];
       root.userData.anim = {
         mixer,
         holder,
-        flash,
         lower,
         upper,
-        aim,
+        layers,
+        lw: [0, 0, 0, 0, 0, 0],
         death,
         w: [1, 0, 0, 0, 0],
-        aimW: 0,
         deadW: 0,
         dead: false,
         yaw: 0,
+        weapons,
+        flashes,
+        rear: rpg.getObjectByName('rear') as THREE.Object3D,
+        warhead: rpg.getObjectByName('warhead') as THREE.Object3D,
+        weapon: 0,
         fireUntil: 0,
         flashUntil: 0,
+        reloadUntil: 0,
+        unloadedUntil: 0,
       } as PlayerAnim;
     } else {
       root.add(simplePlayer(hue));
@@ -601,8 +648,15 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     }
     const now = performance.now();
     const dt = Math.min(0.1, s.dt);
+    // Waffe in der Hand wechseln
+    if (s.weapon !== an.weapon) {
+      an.weapon = s.weapon;
+      an.weapons.forEach((w, i) => (w.visible = i === s.weapon));
+      an.reloadUntil = 0;
+    }
     // Koerper dreht sich schnell, aber weich zur Blickrichtung (statt sofort zu springen)
     const firing = now < an.fireUntil;
+    const reloading = now < an.reloadUntil;
     if (!an.dead && !s.dead) {
       an.yaw += angDiff(s.yaw, an.yaw) * (1 - Math.exp(-(firing ? 28 : 16) * dt));
     }
@@ -627,41 +681,98 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     for (let i = 1; i < 5; i++) target[i] = (raw[i] / sum) * moving;
     const k = 1 - Math.exp(-12 * dt);
     for (let i = 0; i < 5; i++) an.w[i] += (target[i] - an.w[i]) * k;
-    an.aimW += ((firing && !s.dead ? 1 : 0) - an.aimW) * (1 - Math.exp(-(firing ? 22 : 7) * dt));
     an.deadW += ((s.dead ? 1 : 0) - an.deadW) * (1 - Math.exp(-14 * dt));
     const alive = 1 - an.deadW;
+    // Oberkoerper: Gewehr und RPG sind immer im Anschlag (zweihaendig), die Pistole nur beim Schiessen
+    const two = an.weapon >= 1 ? 2 : 0;
+    const lt = [0, 0, 0, 0, 0, 0];
+    if (!s.dead) {
+      if (reloading) lt[4 + (two ? 1 : 0)] = 1;
+      else if (firing) lt[1 + two] = 1;
+      else if (two) lt[2] = 1;
+    }
+    const lk = 1 - Math.exp(-(reloading || firing ? 18 : 9) * dt);
+    let lsum = 0;
+    for (let i = 0; i < 6; i++) {
+      an.lw[i] += (lt[i] - an.lw[i]) * lk;
+      lsum += an.lw[i];
+    }
+    const norm = lsum > 1 ? 1 / lsum : 1; // zusammen nie mehr als 1
+    const free = Math.max(0, 1 - lsum * norm);
     const ts = Math.min(1.6, Math.max(0.75, speed / 6.5));
     for (let i = 0; i < 5; i++) {
       an.lower[i].setEffectiveWeight(an.w[i] * alive);
-      an.upper[i].setEffectiveWeight(an.w[i] * alive * (1 - an.aimW));
+      an.upper[i].setEffectiveWeight(an.w[i] * alive * free);
       if (i > 0) {
         an.lower[i].timeScale = ts;
         an.upper[i].timeScale = ts;
       }
     }
-    an.aim.setEffectiveWeight(an.aimW * alive);
+    for (let i = 0; i < 6; i++) an.layers[i].setEffectiveWeight(an.lw[i] * norm * alive);
     an.death.setEffectiveWeight(an.deadW);
-    // Muendungsfeuer
+    // Muendungsfeuer und RPG-Granate (fehlt, solange das Rohr leer ist)
     const on = now < an.flashUntil;
-    an.flash.visible = on;
+    const fl = an.flashes[an.weapon];
+    an.flashes.forEach((f, i) => (f.visible = on && i === an.weapon));
     if (on) {
-      const sz = 0.7 + Math.random() * 0.5;
-      an.flash.scale.set(sz, sz, 1);
-      (an.flash.material as THREE.SpriteMaterial).rotation = Math.random() * 6;
+      const sz = an.weapon === 2 ? 0.5 : 0.35 + Math.random() * 0.3;
+      fl.scale.set(sz, sz, 1);
+      (fl.material as THREE.SpriteMaterial).rotation = Math.random() * 6;
+    }
+    if (an.warhead) an.warhead.visible = now >= an.unloadedUntil;
+  }
+
+  const _w1 = new THREE.Vector3();
+  const _w2 = new THREE.Vector3();
+  function playerFired(o: THREE.Object3D, weapon: number) {
+    const an = o.userData.anim as PlayerAnim | undefined;
+    const now = performance.now();
+    if (!an || weapon > 2) return;
+    // Erster Schuss einer Salve: Schuss-Animation von vorn starten, damit der Rueckstoss zum Knall passt
+    if (now >= an.fireUntil) an.layers[1 + (weapon >= 1 ? 2 : 0)].reset().play();
+    // Zielhaltung bleibt noch etwas nach dem letzten Schuss, damit es nicht flackert
+    an.fireUntil = now + (weapon === 2 ? 900 : 450);
+    an.flashUntil = now + (weapon === 2 ? 110 : 60);
+    const fl = an.flashes[weapon];
+    fl.getWorldPosition(_w1);
+    const p = _w1;
+    for (let i = 0; i < 3; i++) fire.emit(p.x, p.y, p.z, (Math.random() - 0.5) * 2, Math.random() * 1.5, (Math.random() - 0.5) * 2, 0.12, 0.5, 0.1, 1, 0.75, 0.3, 0.7);
+    smoke.emit(p.x, p.y, p.z, (Math.random() - 0.5) * 0.6, 0.8, (Math.random() - 0.5) * 0.6, 0.7, 0.2, 0.7, 0.75, 0.75, 0.75, 0.28, 0, 1.5);
+    if (weapon === 2) {
+      // Feuerstrahl nach hinten (Backblast) und das leere Rohr
+      an.unloadedUntil = now + 1e9;
+      an.rear.getWorldPosition(_w2);
+      const dx = _w2.x - p.x;
+      const dy = _w2.y - p.y;
+      const dz = _w2.z - p.z;
+      const l = Math.hypot(dx, dy, dz) || 1;
+      const bx = dx / l;
+      const by = dy / l;
+      const bz = dz / l;
+      for (let i = 0; i < 16; i++) {
+        const v = 6 + Math.random() * 12;
+        fire.emit(_w2.x, _w2.y, _w2.z, bx * v + (Math.random() - 0.5) * 3, by * v + (Math.random() - 0.5) * 3, bz * v + (Math.random() - 0.5) * 3, 0.2 + Math.random() * 0.25, 0.9 + Math.random() * 0.5, 0.2, 1, 0.65 + Math.random() * 0.25, 0.25, 0.9, 0, 3);
+      }
+      for (let i = 0; i < 14; i++) {
+        const v = 2 + Math.random() * 7;
+        const g = 0.7 + Math.random() * 0.2;
+        smoke.emit(_w2.x, _w2.y, _w2.z, bx * v + (Math.random() - 0.5) * 2, by * v + 0.5 + Math.random(), bz * v + (Math.random() - 0.5) * 2, 1 + Math.random() * 0.9, 0.8, 3 + Math.random() * 1.5, g, g, g, 0.5, 0, 1.6);
+      }
     }
   }
 
-  function playerFired(o: THREE.Object3D) {
+  // Nachladen: Animation passend zur Nachladezeit des Servers abspielen
+  function playerReload(o: THREE.Object3D, dur: number, weapon: number) {
     const an = o.userData.anim as PlayerAnim | undefined;
+    if (!an || weapon > 2) return;
     const now = performance.now();
-    if (!an) return;
-    // Zielhaltung bleibt noch etwas nach dem letzten Schuss, damit es nicht flackert
-    an.fireUntil = now + 450;
-    an.flashUntil = now + 60;
-    const p = new THREE.Vector3();
-    an.flash.getWorldPosition(p);
-    for (let i = 0; i < 3; i++) fire.emit(p.x, p.y, p.z, (Math.random() - 0.5) * 2, Math.random() * 1.5, (Math.random() - 0.5) * 2, 0.12, 0.5, 0.1, 1, 0.75, 0.3, 0.7);
-    smoke.emit(p.x, p.y, p.z, (Math.random() - 0.5) * 0.6, 0.8, (Math.random() - 0.5) * 0.6, 0.7, 0.2, 0.7, 0.75, 0.75, 0.75, 0.28, 0, 1.5);
+    const two = weapon >= 1;
+    const act = an.layers[4 + (two ? 1 : 0)];
+    act.reset().play();
+    act.timeScale = act.getClip().duration / Math.max(0.3, dur);
+    an.reloadUntil = now + dur * 1000;
+    an.fireUntil = 0;
+    if (weapon === 2) an.unloadedUntil = now + dur * 500; // die neue Granate erscheint in der Mitte des Nachladens
   }
 
   function disposeObject(o: THREE.Object3D) {
@@ -773,9 +884,135 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     return g;
   }
 
-  function makeRocket() {
-    const g = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, 1.0), new THREE.MeshBasicMaterial({ color: 0xffd9a0 }));
+  // ---------------------------------------------------------------- Waffenmodelle (prozedural, Lauf entlang +Z, Griff im Ursprung)
+  function weaponModels(): { group: THREE.Group; muzzle: number }[] {
+    const M = (c: number, metal = 0.5, rough = 0.5) => new THREE.MeshStandardMaterial({ color: c, metalness: metal, roughness: rough });
+    const steel = M(0x2b2f35, 0.8, 0.35);
+    const dark = M(0x15171a, 0.4, 0.6);
+    const olive = M(0x55603a, 0.2, 0.7);
+    const wood = M(0x6a4528, 0.1, 0.8);
+    const box = (g: THREE.Group, w: number, h: number, d: number, x: number, y: number, z: number, m: THREE.Material) => {
+      const me = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
+      me.position.set(x, y, z);
+      g.add(me);
+      return me;
+    };
+    const cyl = (g: THREE.Group, r0: number, r1: number, len: number, z: number, m: THREE.Material, y = 0, x = 0) => {
+      const me = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, len, 14), m);
+      me.rotation.x = Math.PI / 2;
+      me.position.set(x, y, z);
+      g.add(me);
+      return me;
+    };
+    // Pistole
+    const pistol = new THREE.Group();
+    box(pistol, 0.04, 0.05, 0.22, 0, 0.03, 0.08, steel);
+    box(pistol, 0.035, 0.1, 0.05, 0, -0.04, 0.0, dark).rotation.x = -0.2;
+    box(pistol, 0.02, 0.012, 0.012, 0, 0.062, 0.18, dark);
+    // Sturmgewehr
+    const rifle = new THREE.Group();
+    box(rifle, 0.05, 0.08, 0.45, 0, 0.03, 0.15, dark);
+    cyl(rifle, 0.012, 0.012, 0.35, 0.55, steel, 0.04);
+    box(rifle, 0.045, 0.09, 0.08, 0, -0.06, 0.0, dark).rotation.x = -0.25;
+    box(rifle, 0.04, 0.16, 0.06, 0, -0.1, 0.16, steel).rotation.x = 0.15; // Magazin
+    box(rifle, 0.05, 0.1, 0.24, 0, 0.0, -0.22, wood); // Schaft
+    box(rifle, 0.02, 0.03, 0.12, 0, 0.1, 0.18, steel); // Visier
+    box(rifle, 0.05, 0.05, 0.2, 0, 0.0, 0.4, wood);
+    // RPG-7: Rohr, Trichter, Hitzeschild, Visier, abnehmbare Granate
+    const rpg = new THREE.Group();
+    cyl(rpg, 0.045, 0.045, 0.9, 0.05, olive, 0.02); // Rohr
+    cyl(rpg, 0.045, 0.045, 0.34, -0.5, wood, 0.02); // Holz-Hitzeschutz
+    const venturi = cyl(rpg, 0.045, 0.085, 0.16, -0.62, steel, 0.02);
+    venturi.rotation.x = -Math.PI / 2;
+    cyl(rpg, 0.06, 0.06, 0.04, 0.5, steel, 0.02);
+    box(rpg, 0.04, 0.1, 0.05, 0, -0.06, 0.0, dark).rotation.x = -0.2; // Pistolengriff
+    box(rpg, 0.04, 0.1, 0.05, 0, -0.07, 0.3, dark); // Vordergriff
+    box(rpg, 0.015, 0.07, 0.015, 0.045, 0.09, 0.15, steel); // Visier
+    const rear = new THREE.Object3D();
+    rear.name = 'rear';
+    rear.position.set(0, 0.02, -0.72);
+    rpg.add(rear);
+    const warhead = new THREE.Group();
+    warhead.name = 'warhead';
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.052, 0.2, 14), M(0x4d5a2c, 0.3, 0.6));
+    nose.rotation.x = Math.PI / 2;
+    nose.position.set(0, 0.02, 0.62);
+    const body = cyl(warhead, 0.047, 0.047, 0.2, 0.52, olive, 0.02);
+    body.scale.set(1.15, 1, 1.15);
+    warhead.add(nose);
+    rpg.add(warhead);
+    return [
+      { group: pistol, muzzle: 0.22 },
+      { group: rifle, muzzle: 0.75 },
+      { group: rpg, muzzle: 0.75 },
+    ];
+  }
+
+  // ---------------------------------------------------------------- Projektile: 0 RPG-Granate, 1 Flugzeugrakete, 2 Bombe
+  function makeProjectile(kind: number): THREE.Object3D {
+    const g = new THREE.Group();
+    const m = (c: number) => new THREE.MeshStandardMaterial({ color: c, metalness: 0.4, roughness: 0.5 });
+    const cyl = (r: number, len: number, z: number, c: number) => {
+      const me = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 12), m(c));
+      me.rotation.x = Math.PI / 2;
+      me.position.z = z;
+      g.add(me);
+    };
+    const cone = (r: number, len: number, z: number, c: number, flip = false) => {
+      const me = new THREE.Mesh(new THREE.ConeGeometry(r, len, 12), m(c));
+      me.rotation.x = flip ? -Math.PI / 2 : Math.PI / 2;
+      me.position.z = z;
+      g.add(me);
+    };
+    const fins = (r: number, z: number, c: number) => {
+      for (let i = 0; i < 4; i++) {
+        const f = new THREE.Mesh(new THREE.BoxGeometry(0.01, r * 2.4, r * 1.6), m(c));
+        f.rotation.z = (i * Math.PI) / 2;
+        f.position.z = z;
+        g.add(f);
+      }
+    };
+    if (kind === 2) {
+      // Bombe: dicker Koerper, Spitze, Leitwerk
+      cyl(0.17, 0.7, 0, 0x3b4a2a);
+      cone(0.17, 0.3, 0.5, 0x3b4a2a);
+      cone(0.17, 0.2, -0.45, 0x3b4a2a, true);
+      fins(0.17, -0.55, 0x222222);
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.175, 0.175, 0.05, 12), m(0xd8c14a));
+      band.rotation.x = Math.PI / 2;
+      band.position.z = 0.15;
+      g.add(band);
+    } else if (kind === 1) {
+      cyl(0.07, 1.1, 0, 0xd7d9dc);
+      cone(0.07, 0.3, 0.7, 0xb53a2a);
+      fins(0.07, -0.45, 0x444444);
+    } else {
+      cyl(0.05, 0.3, 0, 0x55603a);
+      cone(0.055, 0.22, 0.26, 0x4d5a2c);
+      fins(0.05, -0.15, 0x333333);
+    }
+    // heller Flammenkern
+    const flame = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false, color: 0xffb060 }));
+    flame.scale.set(kind === 2 ? 0.01 : 0.9, kind === 2 ? 0.01 : 0.9, 1);
+    flame.position.z = kind === 1 ? -0.6 : -0.3;
+    g.add(flame);
     return g;
+  }
+
+  const _pp = new THREE.Vector3();
+  const _pd = new THREE.Vector3();
+  function projectileFx(o: THREE.Object3D, kind: number, dt: number) {
+    if (kind === 2) return; // Bomben fallen ohne Spur
+    o.getWorldPosition(_pp);
+    o.getWorldDirection(_pd);
+    const n = Math.max(1, Math.round(dt * 90));
+    for (let i = 0; i < n; i++) {
+      const bx = _pp.x - _pd.x * (0.3 + Math.random() * 0.6);
+      const by = _pp.y - _pd.y * (0.3 + Math.random() * 0.6);
+      const bz = _pp.z - _pd.z * (0.3 + Math.random() * 0.6);
+      fire.emit(bx, by, bz, -_pd.x * 4 + (Math.random() - 0.5), -_pd.y * 4 + (Math.random() - 0.5), -_pd.z * 4 + (Math.random() - 0.5), 0.14, 0.35, 0.05, 1, 0.7, 0.25, 0.9);
+      smoke.emit(bx, by, bz, (Math.random() - 0.5) * 0.8, 0.3 + Math.random() * 0.4, (Math.random() - 0.5) * 0.8, 1.4, 0.3, 1.8, 0.7, 0.7, 0.7, 0.4, 0, 0.8);
+    }
   }
 
   // ---------------------------------------------------------------- Einschusslöcher und Brandflecken
@@ -1128,7 +1365,9 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     makeCar,
     spinWheels,
     makePlane,
-    makeRocket,
+    makeProjectile,
+    projectileFx,
+    playerReload,
     tracer,
     vehicleFx,
     boom,
