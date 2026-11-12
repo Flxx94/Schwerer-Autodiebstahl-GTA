@@ -114,7 +114,7 @@ export async function loadAssets(base = 'assets/'): Promise<Assets | null> {
       const k = CHAR_HEIGHT / (box.max.y - box.min.y || 1);
       scene.scale.setScalar(k);
       scene.traverse((o) => {
-        if (['Knife', 'Knife_Offhand', 'Throwable', '2H_Crossbow'].includes(o.name)) o.visible = false;
+        if (['Knife', 'Knife_Offhand', 'Throwable', '1H_Crossbow', '2H_Crossbow'].includes(o.name)) o.visible = false;
         const mesh = o as THREE.Mesh;
         if (mesh.isMesh) mesh.frustumCulled = false; // Skinned Meshes: Huellkoerper stimmt in Animation nicht
       });

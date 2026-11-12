@@ -11,8 +11,8 @@ const canvas = $<HTMLCanvasElement>('game');
 const world = createWorld(canvas);
 
 interface PlayerS { i: number; n: string; h: number; x: number; y: number; z: number; yaw: number; hp: number; v: number; k: number; d: number; w: number }
-interface VehS { i: number; k: number; x: number; y: number; z: number; yaw: number; p: number; r: number; hp: number; b?: number; d: number; o: number }
-interface ProjS { i: number; x: number; y: number; z: number }
+interface VehS { q?: number[]; i: number; k: number; x: number; y: number; z: number; yaw: number; p: number; r: number; hp: number; b?: number; d: number; o: number }
+interface ProjS { i: number; k: number; x: number; y: number; z: number; d: number[] }
 interface Snap { t: number; pl: Map<number, PlayerS>; ve: Map<number, VehS> }
 
 let ws: WebSocket | null = null;
@@ -30,6 +30,10 @@ let hp = 100;
 let myVeh = 0;
 let weaponName = '';
 let weaponIdx = 0;
+let wCtx = 0; // 0 zu Fuss, 1 Flugzeug, 2 keine Waffe (Auto)
+let wAmmo = 0;
+let wMag = 0;
+let wReload = 0;
 let pingMs = 0;
 let acc = 0;
 let lastFireSent = 0;
@@ -129,6 +133,10 @@ function onSnap(s: any) {
   myVeh = s.veh;
   weaponName = s.wn;
   weaponIdx = s.wi;
+  wCtx = s.ctx;
+  wAmmo = s.am;
+  wMag = s.mg;
+  wReload = s.rl;
   reconcile(s);
   for (const e of s.ev as any[]) onEvent(e);
 }
@@ -160,6 +168,10 @@ function reconcile(s: any) {
   body.z = lerp(body.z, b.z, 0.3);
   body.pitch = b.pitch;
   body.roll = b.roll;
+  body.qx = b.qx;
+  body.qy = b.qy;
+  body.qz = b.qz;
+  body.qw = b.qw;
   body.speed = b.speed;
   body.throttle = b.throttle;
   if (body.mode !== FOOT) body.yaw = b.yaw;
@@ -176,10 +188,20 @@ function toast(text: string) {
 
 function onEvent(e: any) {
   if (e.k === 'shot') {
-    world.tracer(e.a, e.b, e.hit, e.wl);
-    const shooter = e.by === myId ? myMesh : objs.pl.get(e.by);
-    if (shooter) world.playerFired(shooter);
-    if (e.by === myId) navigator.vibrate?.(8);
+    if (e.w < 4) world.tracer(e.a, e.b, e.hit, e.wl);
+    if (e.w < 3) {
+      const shooter = e.by === myId ? myMesh : objs.pl.get(e.by);
+      if (shooter) world.playerFired(shooter, e.w);
+    }
+    if (e.by === myId) navigator.vibrate?.(e.w === 2 || e.w === 4 ? 25 : 8);
+  } else if (e.k === 'drop') {
+    if (e.by === myId) navigator.vibrate?.(20);
+  } else if (e.k === 'rl') {
+    if (e.w < 3) {
+      const o = e.by === myId ? myMesh : objs.pl.get(e.by);
+      if (o) world.playerReload(o, e.d, e.w);
+    }
+    if (e.by === myId) toast('Nachladen …');
   } else if (e.k === 'boom') {
     world.boom(e.x, e.y, e.z, e.r);
     if (Math.hypot(e.x - body.x, e.z - body.z) < 25) navigator.vibrate?.(60);
@@ -196,7 +218,24 @@ function updateHud(now: number) {
   const f = $('hpfill');
   f.style.width = `${Math.max(0, hp)}%`;
   f.style.background = hp > 60 ? '#4ade80' : hp > 30 ? '#facc15' : '#f87171';
-  $('weaponName').textContent = weaponName;
+  const hasW = wCtx !== 2;
+  $('wMain').style.display = hasW ? 'block' : 'none';
+  if (hasW) {
+    const WI = [['🔫', '🔫', '🚀'], ['🔫', '🚀', '💣']][wCtx];
+    $('wIcon').textContent = WI[weaponIdx] ?? '';
+    $('wName').textContent = weaponName;
+    $('wMag').textContent = String(wAmmo);
+    $('wMag').style.color = wAmmo === 0 || wReload > 0 ? '#f87171' : '#fff';
+    $('wMagMax').textContent = ` / ${wMag}   ∞`;
+    $('wRel').style.display = wReload > 0 ? 'block' : 'none';
+    $('wRelFill').style.width = `${wReload * 100}%`;
+    $('wState').textContent = wReload > 0 ? 'Nachladen …' : wAmmo === 0 ? 'Leer – nachladen (T)' : '';
+    const slots = $('wSlots').children;
+    for (let i = 0; i < slots.length; i++) {
+      (slots[i] as HTMLElement).classList.toggle('sel', i === weaponIdx);
+      (slots[i] as HTMLElement).textContent = (wCtx === 1 ? ['MG', 'Rakete', 'Bombe'] : ['Pistole', 'Gewehr', 'RPG'])[i];
+    }
+  }
   $('dead').style.display = hp <= 0 && joined ? 'flex' : 'none';
   const sp = $('speedo');
   if (body.mode === CAR) sp.textContent = `${Math.round(Math.abs(body.speed) * 3.6)} km/h`;
@@ -357,7 +396,7 @@ function syncObjects(rt: number, alpha: number, dt: number) {
     o.userData.vx = (o.userData.vx ?? 0) * 0.75 + vx * 0.25;
     o.userData.vz = (o.userData.vz ?? 0) * 0.75 + vz * 0.25;
     o.position.set(s.x, s.y, s.z);
-    world.animatePlayer(o, { vx: o.userData.vx, vz: o.userData.vz, yaw: s.yaw, dead: p.hp <= 0, dt });
+    world.animatePlayer(o, { vx: o.userData.vx, vz: o.userData.vz, yaw: s.yaw, dead: p.hp <= 0, dt, weapon: p.w ?? 0 });
   }
   // Eigene Figur
   const me = last.pl.get(myId);
@@ -371,7 +410,7 @@ function syncObjects(rt: number, alpha: number, dt: number) {
     myMesh.visible = myVeh === 0 && (hp > 0 || performance.now() - myMesh.userData.deadAt < 3000);
     myMesh.position.set(lerp(prev.x, body.x, alpha), 0, lerp(prev.z, body.z, alpha));
     const on = body.mode === FOOT && hp > 0;
-    world.animatePlayer(myMesh, { vx: on ? (body.x - prev.x) / DT : 0, vz: on ? (body.z - prev.z) / DT : 0, yaw: ctl.yaw, dead: hp <= 0, dt });
+    world.animatePlayer(myMesh, { vx: on ? (body.x - prev.x) / DT : 0, vz: on ? (body.z - prev.z) / DT : 0, yaw: ctl.yaw, dead: hp <= 0, dt, weapon: weaponIdx });
   }
   // Fahrzeuge
   for (const [id, o] of objs.ve) {
@@ -395,14 +434,22 @@ function syncObjects(rt: number, alpha: number, dt: number) {
       vx = lerp(prev.x, body.x, alpha);
       vz = lerp(prev.z, body.z, alpha);
       o.position.set(vx, lerp(prev.y, body.y, alpha), vz);
-      o.rotation.set(body.pitch, body.yaw, -body.roll);
+      if (v.k === PLANE) {
+        _qa.set(prev.qx, prev.qy, prev.qz, prev.qw);
+        _qb.set(body.qx, body.qy, body.qz, body.qw);
+        o.quaternion.copy(_qa.slerp(_qb, alpha));
+      } else o.rotation.set(body.pitch, body.yaw, -body.roll);
       vyaw = body.yaw;
     } else {
       const s = interp('ve', v.i, rt) ?? v;
       vx = s.x;
       vz = s.z;
       o.position.set(s.x, s.y, s.z);
-      o.rotation.set(s.p, s.yaw, -s.r);
+      if (v.k === PLANE && v.q) {
+        _qb.set(v.q[0], v.q[1], v.q[2], v.q[3]);
+        if (o.userData.qInit) o.quaternion.slerp(_qb, 1 - Math.exp(-14 * dt));
+        else (o.quaternion.copy(_qb), (o.userData.qInit = true));
+      } else o.rotation.set(s.p, s.yaw, -s.r);
       vyaw = s.yaw;
     }
     world.vehicleFx(o, v.k, v.hp / (v.k === PLANE ? 200 : 300), !!v.b, dt);
@@ -416,27 +463,34 @@ function syncObjects(rt: number, alpha: number, dt: number) {
       o.userData.lz = vz;
     }
   }
-  // Raketen
+  // Projektile (RPG-Granate, Raketen, Bomben)
   const seen = new Set<number>();
   for (const p of latestPr) {
     seen.add(p.i);
     let o = objs.pr.get(p.i);
     if (!o) {
-      o = world.makeRocket();
+      o = world.makeProjectile(p.k);
       world.scene.add(o);
       objs.pr.set(p.i, o);
     }
     o.position.set(p.x, p.y, p.z);
+    if (p.d) o.lookAt(p.x + p.d[0], p.y + p.d[1], p.z + p.d[2]);
+    world.projectileFx(o, p.k, dt);
   }
   for (const [id, o] of objs.pr) {
     if (!seen.has(id)) {
+      world.disposeObject(o);
       world.scene.remove(o);
       objs.pr.delete(id);
     }
   }
 }
 
-const cam = { yaw: 0, pitch: 0 };
+const cam = { yaw: 0, pitch: 0, q: new THREE.Quaternion(), init: false };
+const _qa = new THREE.Quaternion();
+const _qb = new THREE.Quaternion();
+const _qc = new THREE.Quaternion();
+const _v = new THREE.Vector3();
 function updateCamera(alpha: number, dt: number) {
   const c = world.camera;
   if (!joined || needInit) {
@@ -449,6 +503,7 @@ function updateCamera(alpha: number, dt: number) {
   const py = lerp(prev.y, body.y, alpha);
   const pz = lerp(prev.z, body.z, alpha);
   const k = 1 - Math.exp(-6 * dt);
+  if (body.mode !== PLANE) cam.init = false;
   if (body.mode === FOOT) {
     c.fov = 60;
     c.updateProjectionMatrix();
@@ -482,13 +537,19 @@ function updateCamera(alpha: number, dt: number) {
     c.fov = 70;
     c.updateProjectionMatrix();
     cam.yaw = lerpAng(cam.yaw, body.yaw, k);
-    cam.pitch = lerp(cam.pitch, body.pitch * 0.6, k);
-    const cp = Math.cos(cam.pitch);
-    const dx = -Math.sin(cam.yaw) * cp;
-    const dy = Math.sin(cam.pitch);
-    const dz = -Math.cos(cam.yaw) * cp;
-    c.position.set(px - dx * 14, Math.max(1, py - dy * 14 + 3.8), pz - dz * 14);
-    c.lookAt(px + dx * 25, py + dy * 25 + 1, pz + dz * 25);
+    // Verfolgerkamera folgt der vollen 3D-Lage des Flugzeugs (Rollen und Loopings), leicht verzoegert
+    _qa.set(prev.qx, prev.qy, prev.qz, prev.qw);
+    _qb.set(body.qx, body.qy, body.qz, body.qw);
+    _qa.slerp(_qb, alpha);
+    if (!cam.init) {
+      cam.q.copy(_qa);
+      cam.init = true;
+    }
+    cam.q.slerp(_qa, 1 - Math.exp(-7 * dt));
+    _v.set(0, 3.4, 14).applyQuaternion(cam.q);
+    c.position.set(px + _v.x, Math.max(1, py + _v.y), pz + _v.z);
+    _qc.setFromAxisAngle(_v.set(1, 0, 0), -0.12);
+    c.quaternion.copy(cam.q).multiply(_qc);
   }
 }
 
@@ -523,6 +584,8 @@ initControls({
   enter: () => send({ t: 'enter' }),
   spawn: (kind) => send({ t: 'spawn', kind }),
   weapon: () => send({ t: 'weapon', i: (weaponIdx + 1) % 3 }),
+  select: (i) => send({ t: 'weapon', i }),
+  reload: () => send({ t: 'reload' }),
 });
 
 const nameEl = $<HTMLInputElement>('name');

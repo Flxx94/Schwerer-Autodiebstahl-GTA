@@ -45,7 +45,21 @@
       #hud { left: calc(12px + env(safe-area-inset-left)); top: calc(10px + env(safe-area-inset-top)); text-shadow: 0 1px 3px #000; }
       #hpbar { width: 150px; height: 12px; border: 2px solid var(--uib); border-radius: 7px; overflow: hidden; background: rgba(0,0,0,.35); }
       #hpfill { height: 100%; width: 100%; background: #4ade80; }
-      #weaponName { margin-top: 4px; font-weight: 700; }
+      #weaponName { display: none; }
+      #wHud { left: calc(12px + env(safe-area-inset-left)); bottom: calc(10px + env(safe-area-inset-bottom)); width: 150px; text-align: right; text-shadow: 0 1px 3px #000; pointer-events: none; }
+      #wSlots { pointer-events: auto; }
+      #wMain { background: var(--ui); border: 2px solid var(--uib); border-radius: 12px; padding: 6px 10px 8px; }
+      #wIcon { font-size: 22px; float: left; line-height: 1.1; }
+      #wMag { font-size: 30px; font-weight: 800; line-height: 1; }
+      #wMagMax { font-size: 13px; opacity: .85; }
+      #wName { font-size: 12px; font-weight: 700; margin-top: 2px; }
+      #wState { font-size: 12px; min-height: 15px; color: #fca5a5; }
+      #wRel { height: 6px; border-radius: 3px; background: rgba(0,0,0,.45); overflow: hidden; display: none; margin-top: 3px; }
+      #wRelFill { height: 100%; width: 0; background: #ffb020; }
+      #wSlots { display: flex; gap: 4px; margin-top: 6px; justify-content: flex-end; }
+      .slot { font-size: 11px; padding: 3px 6px; border-radius: 8px; border: 1px solid var(--uib); background: rgba(0,0,0,.35); opacity: .7; }
+      .slot.sel { background: rgba(255,176,32,.6); opacity: 1; font-weight: 700; }
+      #btnReload { right: calc(190px + env(safe-area-inset-right)); bottom: calc(110px + env(safe-area-inset-bottom)); width: 62px; height: 62px; }
       #speedo { margin-top: 2px; font-size: 13px; opacity: .9; }
       #score { margin-top: 6px; font-size: 12px; opacity: .9; white-space: pre; }
       #minimap { right: calc(12px + env(safe-area-inset-right)); top: calc(10px + env(safe-area-inset-top)); width: 112px; height: 112px; border-radius: 50%;
@@ -77,6 +91,7 @@
         <div id="speedo"></div>
         <div id="score"></div>
       </div>
+      <div id="wHud"><div id="wMain"><div id="wIcon"></div><div><span id="wMag"></span><span id="wMagMax"></span></div><div id="wName"></div><div id="wRel"><div id="wRelFill"></div></div><div id="wState"></div><div id="wSlots"><span class="slot"></span><span class="slot"></span><span class="slot"></span></div></div></div>
       <canvas id="minimap" width="224" height="224"></canvas>
       <div id="ping"></div>
       <div id="feed"></div>
@@ -85,6 +100,7 @@
       <div id="spawnMenu"><div class="btn" id="spawnCar">Auto</div><div class="btn" id="spawnPlane">Flugzeug</div></div>
       <div id="btnSpawn" class="btn">Spawn</div>
       <div id="btnWeapon" class="btn">Waffe</div>
+      <div id="btnReload" class="btn">Nach-<br>laden</div>
       <div id="btnEnter" class="btn">Einsteigen</div>
       <div id="btnFire" class="btn">Feuer</div>
       <div id="dead"><div>Ausgeschaltet &ndash; Respawn gleich&hellip;</div></div>

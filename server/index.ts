@@ -7,7 +7,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Box, WORLD, RUNWAY, buildMap, distToBoxes } from '../shared/map';
-import { Body, Input, CAR, PLANE, newBody, step, clamp } from '../shared/sim';
+import { Body, Input, CAR, PLANE, newBody, step, clamp, planeAxes } from '../shared/sim';
 
 const PORT = Number(process.env.PORT ?? 8080);
 const ROOM_CODE = process.env.ROOM_CODE ?? 'freunde'; // leer = kein Raumcode
@@ -17,18 +17,26 @@ const MAP_SEED = 1337;
 
 const boxes: Box[] = buildMap(MAP_SEED);
 
+// Waffen: unendlich Munition, aber nur ein Magazin (mag) am Stueck, danach Nachladen (reload Sekunden)
 interface Weapon {
   name: string;
   dmg: number;
-  cd: number;
+  cd: number; // Sekunden zwischen zwei Schuessen
   range: number;
+  mag: number; // Magazingroesse
+  reload: number; // Nachladezeit in Sekunden
 }
 const WEAPONS: Weapon[] = [
-  { name: 'Pistole', dmg: 25, cd: 0.35, range: 120 },
-  { name: 'Sturmgewehr', dmg: 11, cd: 0.1, range: 150 },
-  { name: 'Raketenwerfer', dmg: 0, cd: 1.2, range: 300 },
+  { name: 'Pistole', dmg: 25, cd: 0.35, range: 120, mag: 12, reload: 1.4 },
+  { name: 'Sturmgewehr', dmg: 11, cd: 0.1, range: 150, mag: 30, reload: 2.0 },
+  { name: 'RPG-7', dmg: 0, cd: 1.0, range: 300, mag: 1, reload: 2.6 },
 ];
-const PLANE_MG: Weapon = { name: 'Bordkanone', dmg: 8, cd: 0.08, range: 220 };
+// Waffen im Flugzeug: Bordkanone, Raketen, Bomben
+const PLANE_WEAPONS: Weapon[] = [
+  { name: 'Bordkanone', dmg: 8, cd: 0.08, range: 220, mag: 100, reload: 2.8 },
+  { name: 'Raketen', dmg: 0, cd: 0.45, range: 300, mag: 4, reload: 3.5 },
+  { name: 'Bomben', dmg: 0, cd: 0.7, range: 0, mag: 3, reload: 4.5 },
+];
 
 interface Player {
   id: number;
@@ -37,7 +45,11 @@ interface Player {
   ws: WebSocket;
   body: Body; // Koerper zu Fuss
   hp: number;
-  weapon: number;
+  weapon: number; // gewaehlte Waffe zu Fuss
+  pweapon: number; // gewaehlte Waffe im Flugzeug
+  ammo: number[]; // Schuss im Magazin je Waffe zu Fuss
+  pammo: number[]; // ... je Waffe im Flugzeug
+  reload: { plane: boolean; idx: number; until: number; dur: number } | null;
   veh: number | null;
   ack: number;
   tokens: number;
@@ -70,6 +82,12 @@ interface Proj {
   dz: number;
   owner: number;
   life: number;
+  k: 0 | 1 | 2; // 0 = RPG-Granate, 1 = Flugzeugrakete, 2 = Bombe
+  g: number; // Schwerkraft (Bombe)
+  r: number; // Explosionsradius
+  dmg: number;
+  ignoreVeh: number; // eigenes Fahrzeug in den ersten Sekunden ignorieren
+  age: number;
 }
 
 const players = new Map<number, Player>();
@@ -79,6 +97,7 @@ let events: any[] = [];
 let nextId = 1;
 const now = () => Date.now() / 1000;
 const r2 = (v: number) => Math.round(v * 100) / 100;
+const r4 = (v: number) => Math.round(v * 10000) / 10000;
 
 function send(ws: WebSocket, msg: unknown) {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
@@ -208,39 +227,116 @@ function explode(x: number, y: number, z: number, radius: number, dmg: number, b
   }
 }
 
-function fire(p: Player, aimYaw: number, aimPitch: number) {
-  if (p.hp <= 0) return;
-  let w: Weapon;
-  let yaw = aimYaw;
-  let pitch = clamp(aimPitch, -1.2, 1.2);
+// ---------- Munition und Nachladen ----------
+function ctxWeapons(p: Player): { list: Weapon[]; ammo: number[]; idx: number; plane: boolean } | null {
   const veh = p.veh !== null ? vehicles.get(p.veh) : undefined;
   if (veh) {
-    if (veh.kind !== PLANE) return; // aus dem Auto wird nicht geschossen
-    w = PLANE_MG;
-    yaw = veh.body.yaw;
-    pitch = veh.body.pitch;
-  } else {
-    w = WEAPONS[p.weapon];
+    if (veh.kind !== PLANE) return null;
+    return { list: PLANE_WEAPONS, ammo: p.pammo, idx: p.pweapon, plane: true };
   }
+  return { list: WEAPONS, ammo: p.ammo, idx: p.weapon, plane: false };
+}
+
+function startReload(p: Player) {
+  const c = ctxWeapons(p);
+  if (!c || p.hp <= 0 || p.reload) return;
+  const w = c.list[c.idx];
+  if (c.ammo[c.idx] >= w.mag) return;
+  p.reload = { plane: c.plane, idx: c.idx, until: now() + w.reload, dur: w.reload };
+  events.push({ k: 'rl', by: p.id, d: w.reload, w: c.plane ? 3 + c.idx : c.idx });
+}
+
+function finishReloads(t: number) {
+  for (const p of players.values()) {
+    const r = p.reload;
+    if (!r) continue;
+    // Wechselt man das Fahrzeug oder die Waffe, bricht das Nachladen ab
+    const c = ctxWeapons(p);
+    if (!c || c.plane !== r.plane || c.idx !== r.idx) {
+      p.reload = null;
+      continue;
+    }
+    if (t >= r.until) {
+      c.ammo[r.idx] = c.list[r.idx].mag;
+      p.reload = null;
+    }
+  }
+}
+
+function refill(p: Player) {
+  p.ammo = WEAPONS.map((w) => w.mag);
+  p.pammo = PLANE_WEAPONS.map((w) => w.mag);
+  p.reload = null;
+}
+
+function spawnProj(p: Player, o: number[], v: number[], k: 0 | 1 | 2, ownVeh: number) {
+  projs.push({
+    id: nextId++,
+    x: o[0],
+    y: o[1],
+    z: o[2],
+    dx: v[0],
+    dy: v[1],
+    dz: v[2],
+    owner: p.id,
+    life: k === 2 ? 12 : 4,
+    k,
+    g: k === 2 ? 22 : 0,
+    r: k === 2 ? 12 : 7,
+    dmg: k === 2 ? 150 : 80,
+    ignoreVeh: ownVeh,
+    age: 0,
+  });
+}
+
+function fire(p: Player, aimYaw: number, aimPitch: number) {
+  if (p.hp <= 0) return;
+  const c = ctxWeapons(p);
+  if (!c) return; // aus dem Auto wird nicht geschossen
+  const w = c.list[c.idx];
+  const veh = c.plane && p.veh !== null ? vehicles.get(p.veh) : undefined;
   const t = now();
+  if (p.reload) return;
   if (t - p.lastFire < w.cd * 0.9) return;
+  if (c.ammo[c.idx] <= 0) return startReload(p);
   p.lastFire = t;
-  const o = eye(p);
-  const d = dirFrom(yaw, pitch);
-  if (!veh && p.weapon === 2) {
-    projs.push({
-      id: nextId++,
-      x: o[0] + d[0] * 1.5,
-      y: o[1] + d[1] * 1.5,
-      z: o[2] + d[2] * 1.5,
-      dx: d[0] * 45,
-      dy: d[1] * 45,
-      dz: d[2] * 45,
-      owner: p.id,
-      life: 4,
-    });
+  c.ammo[c.idx]--;
+  // Richtung: zu Fuss nach Blick, im Flugzeug entlang der Nase
+  let d: number[];
+  let o = eye(p);
+  let ax = { f: [0, 0, 0], u: [0, 1, 0], r: [1, 0, 0] } as { f: number[]; u: number[]; r: number[] };
+  if (veh) {
+    const a = planeAxes(veh.body);
+    ax = { f: a.f, u: a.u, r: a.r };
+    d = a.f;
+  } else {
+    d = dirFrom(aimYaw, clamp(aimPitch, -1.2, 1.2));
+  }
+  const afterShot = () => {
+    if (c.ammo[c.idx] <= 0) startReload(p);
+  };
+  if (c.plane && c.idx === 1) {
+    // Rakete: abwechselnd links und rechts unter dem Fluegel
+    const side = c.ammo[1] % 2 === 0 ? -1 : 1;
+    const so = [o[0] + ax.f[0] * 3 + ax.r[0] * 1.7 * side - ax.u[0] * 0.5, o[1] + ax.f[1] * 3 + ax.r[1] * 1.7 * side - ax.u[1] * 0.5, o[2] + ax.f[2] * 3 + ax.r[2] * 1.7 * side - ax.u[2] * 0.5];
+    const sp = (veh ? veh.body.speed : 0) + 55;
+    spawnProj(p, so, [d[0] * sp, d[1] * sp, d[2] * sp], 1, veh ? veh.id : 0);
+    events.push({ k: 'shot', by: p.id, a: so.map(r2), b: so.map((v, i) => r2(v + d[i] * 3)), w: 4 });
+    return afterShot();
+  }
+  if (c.plane && c.idx === 2) {
+    // Bombe: faellt aus dem Rumpf, erbt die Fluggeschwindigkeit
+    const bo = [o[0] - ax.u[0] * 1.6, o[1] - ax.u[1] * 1.6 - 0.4, o[2] - ax.u[2] * 1.6];
+    const sp = (veh ? veh.body.speed : 0) * 0.95;
+    spawnProj(p, bo, [d[0] * sp, d[1] * sp - 2, d[2] * sp], 2, veh ? veh.id : 0);
+    events.push({ k: 'drop', by: p.id });
+    return afterShot();
+  }
+  if (!c.plane && c.idx === 2) {
+    // RPG-Granate
+    spawnProj(p, [o[0] + d[0] * 1.5, o[1] + d[1] * 1.5, o[2] + d[2] * 1.5], [d[0] * 45, d[1] * 45, d[2] * 45], 0, 0);
     events.push({ k: 'shot', by: p.id, a: o.map(r2), b: o.map((v, i) => r2(v + d[i] * 3)), w: 2 });
-    return;
+    return afterShot();
   }
   let wall = w.range;
   if (d[1] < -0.001) wall = Math.min(wall, o[1] / -d[1]); // Boden
@@ -253,9 +349,9 @@ function fire(p: Player, aimYaw: number, aimPitch: number) {
   let hitV: Vehicle | null = null;
   for (const q of players.values()) {
     if (q === p || q.hp <= 0 || q.veh !== null) continue;
-    const c = [q.body.x, q.body.y + 1, q.body.z];
-    const dist = Math.hypot(c[0] - o[0], c[1] - o[1], c[2] - o[2]);
-    const tt = raySphere(o, d, c, 0.9 + dist * 0.05); // etwas Zielhilfe fuer Touch
+    const cc = [q.body.x, q.body.y + 1, q.body.z];
+    const dist = Math.hypot(cc[0] - o[0], cc[1] - o[1], cc[2] - o[2]);
+    const tt = raySphere(o, d, cc, 0.9 + dist * 0.05); // etwas Zielhilfe fuer Touch
     if (tt < best) {
       best = tt;
       hitP = q;
@@ -264,9 +360,9 @@ function fire(p: Player, aimYaw: number, aimPitch: number) {
   }
   for (const v of vehicles.values()) {
     if (veh && v === veh) continue;
-    const c = [v.body.x, v.body.y + 1.2, v.body.z];
-    const dist = Math.hypot(c[0] - o[0], c[1] - o[1], c[2] - o[2]);
-    const tt = raySphere(o, d, c, (v.kind === PLANE ? 3.4 : 2.6) + dist * 0.03);
+    const cc = [v.body.x, v.body.y + 1.2, v.body.z];
+    const dist = Math.hypot(cc[0] - o[0], cc[1] - o[1], cc[2] - o[2]);
+    const tt = raySphere(o, d, cc, (v.kind === PLANE ? 3.4 : 2.6) + dist * 0.03);
     if (tt < best) {
       best = tt;
       hitV = v;
@@ -282,10 +378,11 @@ function fire(p: Player, aimYaw: number, aimPitch: number) {
     by: p.id,
     a: o.map(r2),
     b: o.map((v, i) => r2(v + d[i] * Math.min(best, 150))),
-    w: veh ? 3 : p.weapon,
+    w: c.plane ? 3 : c.idx,
     hit: hitP ? 1 : hitV ? 2 : 0,
     wl: !hitP && !hitV && wall < w.range ? 1 : 0, // Treffer an Gebaeude oder Boden: Einschussloch
   });
+  afterShot();
 }
 
 function enter(p: Player) {
@@ -415,6 +512,7 @@ function respawn(p: Player) {
   p.body = newBody(s.x, s.z, p.body.yaw);
   p.hp = 100;
   p.protUntil = now() + 2.5;
+  refill(p);
 }
 
 function handleInput(p: Player, m: any) {
@@ -453,12 +551,35 @@ function onMessage(p: Player, m: any) {
       return p.veh === null ? enter(p) : leave(p);
     case 'spawn':
       return spawnVehicle(p, m.kind === 'plane' ? PLANE : CAR);
-    case 'weapon':
-      p.weapon = clamp(Math.floor(Number(m.i) || 0), 0, WEAPONS.length - 1);
+    case 'weapon': {
+      const c = ctxWeapons(p);
+      if (!c) return;
+      const i = clamp(Math.floor(Number(m.i) || 0), 0, c.list.length - 1);
+      if (c.plane) p.pweapon = i;
+      else p.weapon = i;
       return;
+    }
+    case 'reload':
+      return startReload(p);
     case 'ping':
       return send(p.ws, { t: 'pong', c: m.c });
   }
+}
+
+// Waffen-HUD des Spielers: Name, Magazin, Nachladefortschritt
+function weaponInfo(p: Player) {
+  const c = ctxWeapons(p);
+  if (!c) return { ctx: 2, wi: 0, wn: 'Keine Waffe im Auto', am: 0, mg: 0, rl: 0 };
+  const w = c.list[c.idx];
+  const r = p.reload;
+  return {
+    ctx: c.plane ? 1 : 0,
+    wi: c.idx,
+    wn: w.name,
+    am: c.ammo[c.idx],
+    mg: w.mag,
+    rl: r ? r2(clamp(1 - (r.until - now()) / r.dur, 0, 1)) : 0,
+  };
 }
 
 function tick() {
@@ -468,6 +589,8 @@ function tick() {
   const alive: Proj[] = [];
   for (const pr of projs) {
     let boom = false;
+    pr.age += dt;
+    pr.dy -= pr.g * dt;
     for (let s = 0; s < 3 && !boom; s++) {
       pr.x += (pr.dx * dt) / 3;
       pr.y += (pr.dy * dt) / 3;
@@ -487,12 +610,13 @@ function tick() {
           if (Math.hypot(q.body.x - pr.x, q.body.y + 1 - pr.y, q.body.z - pr.z) < 1.4) boom = true;
         }
         for (const v of vehicles.values()) {
+          if (v.id === pr.ignoreVeh && pr.age < 1.2) continue; // sonst trifft die Rakete das eigene Flugzeug
           if (Math.hypot(v.body.x - pr.x, v.body.y + 1.2 - pr.y, v.body.z - pr.z) < 3) boom = true;
         }
       }
     }
     pr.life -= dt;
-    if (boom) explode(pr.x, pr.y, pr.z, 7, 80, pr.owner);
+    if (boom) explode(pr.x, Math.max(0, pr.y), pr.z, pr.r, pr.dmg, pr.owner);
     else if (pr.life > 0) alive.push(pr);
   }
   projs = alive;
@@ -514,6 +638,7 @@ function tick() {
     const d = v.driver !== null ? players.get(v.driver) : undefined;
     if (d) damagePlayer(d, 14 * (1 / TICK_HZ), v.burnBy);
   }
+  finishReloads(t);
   // Respawn
   for (const p of players.values()) if (p.hp <= 0 && t >= p.deadUntil) respawn(p);
 
@@ -544,12 +669,16 @@ function tick() {
     yaw: r2(v.body.yaw),
     p: r2(v.body.pitch),
     r: r2(v.body.roll),
+    q: v.kind === PLANE ? [r4(v.body.qx), r4(v.body.qy), r4(v.body.qz), r4(v.body.qw)] : undefined,
     hp: Math.round(v.hp),
     b: v.burnUntil > 0 ? 1 : 0,
     d: v.driver ?? 0,
     o: v.owner,
   }));
-  const pr = projs.map((q) => ({ i: q.id, x: r2(q.x), y: r2(q.y), z: r2(q.z) }));
+  const pr = projs.map((q) => {
+    const l = Math.hypot(q.dx, q.dy, q.dz) || 1;
+    return { i: q.id, k: q.k, x: r2(q.x), y: r2(q.y), z: r2(q.z), d: [r2(q.dx / l), r2(q.dy / l), r2(q.dz / l)] };
+  });
   const ev = events;
   events = [];
   for (const p of players.values()) {
@@ -569,11 +698,14 @@ function tick() {
         throttle: r2(b.throttle),
         mode: b.mode,
         crash: false,
+        qx: r4(b.qx),
+        qy: r4(b.qy),
+        qz: r4(b.qz),
+        qw: r4(b.qw),
       },
       hp: Math.round(p.hp),
       veh: p.veh ?? 0,
-      wi: p.weapon,
-      wn: p.veh !== null ? (controlBody(p).mode === PLANE ? PLANE_MG.name : 'Keine Waffe im Auto') : WEAPONS[p.weapon].name,
+      ...weaponInfo(p),
       pl,
       ve,
       pr,
@@ -644,6 +776,10 @@ wss.on('connection', (ws) => {
         body: newBody(s.x, s.z, 0),
         hp: 100,
         weapon: 0,
+        pweapon: 0,
+        ammo: WEAPONS.map((w) => w.mag),
+        pammo: PLANE_WEAPONS.map((w) => w.mag),
+        reload: null,
         veh: null,
         ack: 0,
         tokens: 10,

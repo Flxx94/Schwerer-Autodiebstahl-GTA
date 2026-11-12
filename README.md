@@ -90,11 +90,24 @@ Tipp für Handys: im Browser-Menü „Zum Home-Bildschirm“ wählen, dann start
 | Schießen | Feuer-Button halten | Leertaste |
 | Ein- und Aussteigen | Button „Einsteigen“ (nächstes freies Fahrzeug) | E |
 | Auto oder Flugzeug spawnen | „Spawn“, dann Auto oder Flugzeug | C (Auto), V (Flugzeug) |
-| Waffe wechseln | „Waffe“ (Pistole, Sturmgewehr, Raketenwerfer) | Q |
-| Flugzeug | Joystick hoch = Nase hoch, links/rechts = Kurve; Schubregler | R/F = mehr/weniger Schub |
+| Waffe wechseln | „Waffe“ oder Slot im Waffen-HUD antippen | Q, oder 1/2/3 |
+| Nachladen | „Nachladen“-Button | T |
+| Flugzeug | Joystick hoch/runter = Nase hoch/runter (Looping), links/rechts leicht = Schräglage und Kurve, voll links/rechts = Fassrolle; Schubregler | WASD, R/F = mehr/weniger Schub |
 
 Das Flugzeug hebt ab ca. 70 km/h ab. Es spawnt vor dir in der Richtung mit der längsten freien Strecke; gibt es keine,
-steht es am Flugplatz (breite Straße nach Osten). Im Flugzeug schießt man mit der Bordkanone.
+steht es am Flugplatz (breite Straße nach Osten). Das Flugzeug fliegt voll dreidimensional: Rollen, Loopings und Kurvenflug sind möglich. Zu Boden zeigen oder verkehrt aufsetzen endet im Absturz.
+
+### Waffen und Munition
+Die Reserve ist unendlich, aber jede Waffe hat ein Magazin und muss nachgeladen werden (das HUD unten links zeigt Waffe, Magazin und Nachladebalken).
+
+| Waffe | Magazin | Nachladen |
+|---|---|---|
+| Pistole | 12 | 1,4 s |
+| Sturmgewehr | 30 | 2,0 s |
+| RPG-7 (mit eigenem Modell, Rückstoß-Feuerstrahl) | 1 | 2,6 s |
+| Flugzeug: Bordkanone | 100 | 2,8 s |
+| Flugzeug: Raketen | 4 | 3,5 s |
+| Flugzeug: Bomben (fallen aus dem Rumpf) | 3 | 4,5 s |
 
 ## Aufbau
 

@@ -16,6 +16,8 @@ export interface Actions {
   enter(): void;
   spawn(kind: 'car' | 'plane'): void;
   weapon(): void;
+  select(i: number): void;
+  reload(): void;
 }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -120,6 +122,13 @@ export function initControls(act: Actions) {
   const menu = $('spawnMenu');
   tap('btnEnter', () => act.enter());
   tap('btnWeapon', () => act.weapon());
+  tap('btnReload', () => act.reload());
+  document.querySelectorAll<HTMLElement>('#wSlots .slot').forEach((el, i) =>
+    el.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      act.select(i);
+    }),
+  );
   tap('btnSpawn', () => menu.classList.toggle('open'));
   tap('spawnCar', () => {
     menu.classList.remove('open');
@@ -169,6 +178,8 @@ export function initControls(act: Actions) {
     else if (k === 'c') act.spawn('car');
     else if (k === 'v') act.spawn('plane');
     else if (k === 'q') act.weapon();
+    else if (k === 't') act.reload();
+    else if (k === '1' || k === '2' || k === '3') act.select(Number(k) - 1);
     else keys.add(k);
     upd();
   });
