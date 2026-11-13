@@ -6,7 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { Box, PICKUPS, WORLD, buildMap, distToBoxes } from '../shared/map';
+import { Box, LOOT_INTERVAL, LOOT_LIFETIME, LOOT_MAX, LOOT_RADIUS, WORLD, buildMap, distToBoxes } from '../shared/map';
 import { Body, Input, newBody, step, clamp } from '../shared/sim';
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -94,14 +94,49 @@ function send(ws: WebSocket, msg: unknown) {
 let roundState: 'play' | 'end' = 'play';
 let roundEnds = 0;
 let winner = '';
-const pickupAt: number[] = PICKUPS.map(() => 0); // Zeitpunkt, ab dem der Gegenstand wieder da ist
+// Lootboxen: zufaellige Orte, zufaelliger Inhalt (erst beim Oeffnen gewuerfelt)
+interface Loot {
+  id: number;
+  x: number;
+  z: number;
+  until: number;
+}
+let loot: Loot[] = [];
+let nextLootAt = 0;
+
+function spawnLoot(t: number) {
+  if (loot.length >= LOOT_MAX) return;
+  for (let tries = 0; tries < 30; tries++) {
+    let x = (Math.random() - 0.5) * (WORLD * 2 - 16);
+    let z = (Math.random() - 0.5) * (WORLD * 2 - 16);
+    if (SPAWN_NEAR && players.size) {
+      // nur fuer Tests: Box direkt neben dem ersten Spieler
+      const q = players.values().next().value as Player;
+      x = q.body.x + 2.5 * Math.cos(tries);
+      z = q.body.z + 2.5 * Math.sin(tries);
+    }
+    if (distToBoxes(boxes, x, z) < 2.5) continue;
+    if (!SPAWN_NEAR && loot.some((l) => Math.hypot(l.x - x, l.z - z) < 40)) continue; // Boxen verteilen sich ueber die Karte
+    loot.push({ id: nextId++, x: r2(x), z: r2(z), until: t + LOOT_LIFETIME });
+    events.push({ k: 'lootnew', x: r2(x), z: r2(z) });
+    return;
+  }
+}
+
+// Inhalt: Medikit, Sturmgewehr oder RPG-7 (gewichtet)
+function rollLoot(): 0 | 1 | 2 {
+  const r = Math.random();
+  return r < 0.3 ? 0 : r < 0.8 ? 1 : 2;
+}
 
 function startRound() {
   roundState = 'play';
   roundEnds = now() + ROUND_TIME;
   winner = '';
   projs = [];
-  pickupAt.fill(0);
+  loot = [];
+  nextLootAt = now() + 2;
+  for (let i = 0; i < 3; i++) spawnLoot(now()); // ein paar Boxen liegen von Anfang an bereit
   for (const p of players.values()) {
     p.kills = 0;
     p.deaths = 0;
@@ -154,8 +189,8 @@ function spawnPoint(self: Player | null): { x: number; z: number } {
     const x = (Math.random() - 0.5) * (WORLD * 2 - 20);
     const z = (Math.random() - 0.5) * (WORLD * 2 - 20);
     if (distToBoxes(boxes, x, z) < 2.5) continue;
-    // nicht direkt auf einer Waffe spawnen (das waere ein geschenkter Vorteil)
-    if (PICKUPS.some((k) => k.kind > 0 && Math.hypot(k.x - x, k.z - z) < 6)) continue;
+    // nicht direkt auf einer Lootbox spawnen (das waere ein geschenkter Vorteil)
+    if (loot.some((l) => Math.hypot(l.x - x, l.z - z) < 6)) continue;
     let d = Infinity;
     for (const q of players.values()) if (q !== self && q.hp > 0) d = Math.min(d, Math.hypot(q.body.x - x, q.body.z - z));
     if (d === Infinity) d = 100;
@@ -397,32 +432,36 @@ function onMessage(p: Player, m: any) {
 }
 
 // ---------- Gegenstaende ----------
-function collectPickups(t: number) {
-  PICKUPS.forEach((pk, i) => {
-    if (pickupAt[i] > t) return;
+function collectLoot(t: number) {
+  loot = loot.filter((l) => {
+    if (l.until <= t) return false; // abgelaufen
     for (const p of players.values()) {
       if (p.hp <= 0) continue;
-      if (Math.hypot(p.body.x - pk.x, p.body.z - pk.z) > 1.7) continue;
-      if (pk.kind === 0) {
-        if (p.hp >= 100) continue;
+      if (Math.hypot(p.body.x - l.x, p.body.z - l.z) > LOOT_RADIUS) continue;
+      const kind = rollLoot();
+      if (kind === 0) {
         p.hp = Math.min(100, p.hp + 50);
       } else {
-        const w = WEAPONS[pk.kind];
-        if (!p.own[pk.kind]) {
-          p.own[pk.kind] = true;
-          p.ammo[pk.kind] = w.mag;
-          p.res[pk.kind] = w.pickupRes;
-          p.weapon = pk.kind; // frische Waffe sofort in die Hand
+        const w = WEAPONS[kind];
+        if (!p.own[kind]) {
+          p.own[kind] = true;
+          p.ammo[kind] = w.mag;
+          p.res[kind] = w.pickupRes;
+          p.weapon = kind; // frische Waffe sofort in die Hand
           p.reload = null;
         } else {
-          p.res[pk.kind] = w.pickupRes; // Reserve auffuellen
+          p.res[kind] = w.pickupRes; // Reserve auffuellen
         }
       }
-      pickupAt[i] = t + pk.respawn;
-      events.push({ k: 'pick', by: p.id, i, kind: pk.kind });
-      break;
+      events.push({ k: 'pick', by: p.id, x: l.x, z: l.z, kind });
+      return false;
     }
+    return true;
   });
+  if (t >= nextLootAt) {
+    spawnLoot(t);
+    nextLootAt = t + LOOT_INTERVAL;
+  }
 }
 
 // Waffen-HUD des Spielers: Name, Magazin, Reserve, Nachladefortschritt
@@ -475,7 +514,7 @@ function tick() {
 
   finishReloads(t);
   if (roundState === 'play') {
-    collectPickups(t);
+    collectLoot(t);
     for (const p of players.values()) if (p.hp <= 0 && t >= p.deadUntil) respawn(p);
     if (t >= roundEnds) endRound();
   } else if (t >= roundEnds) {
@@ -500,7 +539,7 @@ function tick() {
     const l = Math.hypot(q.dx, q.dy, q.dz) || 1;
     return { i: q.id, k: 0, x: r2(q.x), y: r2(q.y), z: r2(q.z), d: [r2(q.dx / l), r2(q.dy / l), r2(q.dz / l)] };
   });
-  const pk = PICKUPS.map((_, i) => (pickupAt[i] > t ? 0 : 1));
+  const lb = loot.map((l) => ({ i: l.id, x: l.x, z: l.z }));
   const ev = events;
   events = [];
   const rd = { s: roundState === 'play' ? 0 : 1, t: Math.max(0, Math.ceil(roundEnds - t)), lim: KILL_LIMIT, win: winner };
@@ -513,7 +552,7 @@ function tick() {
       hp: Math.round(p.hp),
       ...weaponInfo(p),
       rd,
-      pk,
+      lb,
       pl,
       pr,
       ev,

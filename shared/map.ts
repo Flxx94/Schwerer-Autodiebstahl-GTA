@@ -116,30 +116,8 @@ export function distToBoxes(boxes: Box[], x: number, z: number): number {
   return best;
 }
 
-// Aufsammelbare Gegenstaende auf festen Plaetzen (Strassenkreuzungen und Platz in der Mitte).
-// kind: 0 Medikit, 1 Sturmgewehr, 2 Raketenwerfer
-export interface Pickup {
-  x: number;
-  z: number;
-  kind: 0 | 1 | 2;
-  respawn: number; // Sekunden bis der Gegenstand wieder da ist
-}
-export const PICKUPS: Pickup[] = [
-  { x: 0, z: 0, kind: 2, respawn: 45 },
-  { x: 78, z: -78, kind: 2, respawn: 45 },
-  { x: -78, z: 78, kind: 2, respawn: 45 },
-  ...[
-    [26, 26],
-    [-26, 26],
-    [26, -26],
-    [-26, -26],
-  ].map(([x, z]) => ({ x, z, kind: 1 as const, respawn: 25 })),
-  ...[
-    [78, 0],
-    [-78, 0],
-    [0, 78],
-    [0, -78],
-    [78, 78],
-    [-78, -78],
-  ].map(([x, z]) => ({ x, z, kind: 0 as const, respawn: 20 })),
-];
+// Lootboxen: tauchen zufaellig auf der Karte auf (Server entscheidet Ort und Inhalt).
+export const LOOT_MAX = 6; // so viele Boxen liegen hoechstens gleichzeitig herum
+export const LOOT_INTERVAL = 9; // alle x Sekunden erscheint eine neue, solange noch Platz ist
+export const LOOT_LIFETIME = 75; // unberuehrte Boxen verschwinden nach so vielen Sekunden
+export const LOOT_RADIUS = 1.7; // Aufsammel-Abstand in Metern

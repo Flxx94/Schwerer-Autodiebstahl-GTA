@@ -15,18 +15,20 @@ am Rechner geht es auch mit Tastatur. (Das Repository heißt noch nach dem früh
 dann beginnt sofort die nächste Runde mit zurückgesetzten Punkten. Wer zu spät dazukommt, steigt einfach ein.
 
 - **Alle starten gleich:** mit der Pistole (Magazin 12, unendlich Reserve) und 100 Leben. Wer will, bleibt dabei.
-- **Bessere Waffen musst du dir holen.** Sie liegen als leuchtende Gegenstände fest auf der Karte und kommen nach
-  einigen Sekunden wieder. Das Sturmgewehr liegt an den vier Kreuzungen rund um die Mitte, der RPG-7 mitten auf dem
-  Platz (und an zwei Ecken). Wer in die Mitte läuft, bekommt die stärkste Waffe, aber auch alle Gegner zu sehen.
-  Gewehr und RPG haben begrenzte Reserve (90 beziehungsweise 3 Raketen); stirbst du, sind sie weg.
-- **Medikits** (+50 Leben) liegen auf den Straßen. Ein Kill gibt zusätzlich +15 Leben.
-- **Kopfschüsse** machen doppelten Schaden. Das Fadenkreuz zeigt Treffer (weiß), Kopfschüsse (gelb) und Kills (rot).
+- **Lootboxen statt Waffen am Boden.** Goldene Kisten mit Fragezeichen und Lichtstrahl tauchen zufällig auf der Karte
+  auf (höchstens 6 gleichzeitig, alle 9 Sekunden eine neue, nach 75 Sekunden ohne Abholer verschwinden sie wieder).
+  Drüberlaufen öffnet sie. Der Inhalt wird erst dann gewürfelt: 30 % Medikit (+50 Leben), 50 % Sturmgewehr, 20 % RPG-7.
+  Hat man die Waffe schon, wird die Reserve aufgefüllt. Gewehr und RPG haben begrenzte Reserve (90 beziehungsweise
+  3 Raketen); stirbst du, sind sie weg. Die Minimap zeigt Lootboxen als gelbe Quadrate. Ein Kill gibt zusätzlich +15 Leben.
+- **Fadenkreuz:** Schüsse gehen genau dorthin, wo es hinzeigt (auch aus der Schulterkamera). Es wird rot, wenn ein Gegner im
+  Visier ist, und weitet sich beim Schießen und Laufen. **Kopfschüsse** machen doppelten Schaden. Treffer (weiß),
+  Kopfschüsse (gelb) und Kills (rot) blitzen als Kreuz auf.
 - **Fair spawnen:** Nach dem Tod gibt es nach 3 Sekunden einen neuen Spawn möglichst weit weg von Gegnern und nie direkt
-  auf einer Waffe. 2,5 Sekunden Schutz (die Figur blinkt), der endet, sobald du schießt.
+  auf einer Lootbox. 2,5 Sekunden Schutz (die Figur blinkt), der endet, sobald du schießt.
 - **Nachladen** gehört dazu: jedes Magazin ist begrenzt, bei leerem Magazin lädt die Figur automatisch nach.
 - **Cover zählt:** Gebäude blockieren Kugeln und RPG-Raketen. Die RPG-Explosion (Radius 6,5 m) trifft auch durch
   Ecken, und die eigene Rakete tut nur halb so viel Schaden.
-- Die Minimap zeigt Gegner (rot), Gegenstände (grün, gelb, orange) und den Arena-Rand. Am roten Rand ist Schluss.
+- Die Minimap zeigt Gegner (rot), Lootboxen (gelb) und den Arena-Rand. Am roten Rand ist Schluss.
 
 | Waffe | Schaden | Magazin | Nachladen | Reserve |
 |---|---|---|---|---|
@@ -118,7 +120,7 @@ Tipp für Handys: im Browser-Menü „Zum Home-Bildschirm“ wählen, dann start
 | Waffe wechseln | „Waffe“ oder Slot im Waffen-HUD antippen | Q, oder 1/2/3 |
 | Nachladen | „Nachladen“-Button | T |
 
-Das Waffen-HUD unten links zeigt Waffe, Magazin, Reserve und einen Nachladebalken. Oben in der Mitte stehen Rundenzeit
+Das Waffen-HUD unten links zeigt Waffe, Magazin, Reserve und einen Nachladebalken. In der Mitte des Bildschirms sitzt das Fadenkreuz. Oben in der Mitte stehen Rundenzeit
 und Kill-Ziel, links oben die Rangliste.
 
 ## Aufbau
