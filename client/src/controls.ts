@@ -1,5 +1,5 @@
 // Touch-Steuerung (und Tastatur zum Testen am Rechner).
-// Links: schwebender Joystick. Rechts: Wischen = Kamera. Buttons: Feuer, Einsteigen, Spawn, Waffe.
+// Links: schwebender Joystick. Rechts: Wischen = Kamera. Buttons: Feuer, Waffe, Nachladen.
 import { clamp } from '../../shared/sim';
 
 export const ctl = {
@@ -8,14 +8,11 @@ export const ctl = {
   yaw: 0,
   pitch: 0.12,
   fire: false,
-  thr: 0, // Schubregler 0..1
   hasTouch: false,
 };
 
 export interface Actions {
-  enter(): void;
-  spawn(kind: 'car' | 'plane'): void;
-  weapon(): void;
+  next(): void;
   select(i: number): void;
   reload(): void;
 }
@@ -119,9 +116,7 @@ export function initControls(act: Actions) {
       fn();
     });
   };
-  const menu = $('spawnMenu');
-  tap('btnEnter', () => act.enter());
-  tap('btnWeapon', () => act.weapon());
+  tap('btnWeapon', () => act.next());
   tap('btnReload', () => act.reload());
   document.querySelectorAll<HTMLElement>('#wSlots .slot').forEach((el, i) =>
     el.addEventListener('pointerdown', (e) => {
@@ -129,40 +124,8 @@ export function initControls(act: Actions) {
       act.select(i);
     }),
   );
-  tap('btnSpawn', () => menu.classList.toggle('open'));
-  tap('spawnCar', () => {
-    menu.classList.remove('open');
-    act.spawn('car');
-  });
-  tap('spawnPlane', () => {
-    menu.classList.remove('open');
-    act.spawn('plane');
-  });
 
-  // ---- Schubregler (nur im Flugzeug sichtbar) ----
-  const thr = $('throttle');
-  const fill = $('throttleFill');
-  let thrId = -1;
-  const setThr = (e: PointerEvent) => {
-    const r = thr.getBoundingClientRect();
-    ctl.thr = clamp(1 - (e.clientY - r.top) / r.height, 0, 1);
-    fill.style.height = `${ctl.thr * 100}%`;
-  };
-  thr.addEventListener('pointerdown', (e) => {
-    thrId = e.pointerId;
-    thr.setPointerCapture(e.pointerId);
-    setThr(e);
-  });
-  thr.addEventListener('pointermove', (e) => {
-    if (e.pointerId === thrId) setThr(e);
-  });
-  const endThr = (e: PointerEvent) => {
-    if (e.pointerId === thrId) thrId = -1;
-  };
-  thr.addEventListener('pointerup', endThr);
-  thr.addEventListener('pointercancel', endThr);
-
-  // ---- Tastatur (zum Testen am Rechner): WASD/Pfeile, Leertaste, E, C, V, Q, R/F fuer Schub ----
+  // ---- Tastatur (zum Testen am Rechner): WASD/Pfeile, Leertaste = Feuer, Q = naechste Waffe, T = Nachladen, 1/2/3 ----
   const keys = new Set<string>();
   const upd = () => {
     if (joyId !== -1) return;
@@ -174,10 +137,7 @@ export function initControls(act: Actions) {
     const k = e.key.toLowerCase();
     if (e.repeat) return;
     if (k === ' ') ctl.fire = true;
-    else if (k === 'e') act.enter();
-    else if (k === 'c') act.spawn('car');
-    else if (k === 'v') act.spawn('plane');
-    else if (k === 'q') act.weapon();
+    else if (k === 'q') act.next();
     else if (k === 't') act.reload();
     else if (k === '1' || k === '2' || k === '3') act.select(Number(k) - 1);
     else keys.add(k);
@@ -189,23 +149,8 @@ export function initControls(act: Actions) {
     keys.delete(k);
     upd();
   });
-  setInterval(() => {
-    if (keys.has('r')) ctl.thr = clamp(ctl.thr + 0.03, 0, 1);
-    if (keys.has('f')) ctl.thr = clamp(ctl.thr - 0.03, 0, 1);
-    if (keys.has('r') || keys.has('f')) fill.style.height = `${ctl.thr * 100}%`;
-  }, 50);
-
   // Browser-Gesten (Zoom, Kontextmenue) abstellen
   document.addEventListener('contextmenu', (e) => e.preventDefault());
   document.addEventListener('gesturestart', (e) => e.preventDefault());
   document.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
-}
-
-export function setThrottleVisible(v: boolean) {
-  $('throttle').style.display = v ? 'block' : 'none';
-}
-
-export function setThrottle(v: number) {
-  ctl.thr = clamp(v, 0, 1);
-  $('throttleFill').style.height = `${ctl.thr * 100}%`;
 }

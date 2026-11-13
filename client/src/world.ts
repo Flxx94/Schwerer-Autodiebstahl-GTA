@@ -1,9 +1,9 @@
-// Alles, was mit Three.js gezeichnet wird: Karte, Spieler, Fahrzeuge, Effekte.
+// Alles, was mit Three.js gezeichnet wird: Karte, Spieler, Gegenstaende, Effekte.
 // Mit KayKit-Modellen (assets.ts); fehlen sie, gibt es einfache Klotz-Modelle als Ersatz.
 import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { City, Box, WORLD, CELL, RUNWAY } from '../../shared/map';
+import { City, Box, WORLD, CELL } from '../../shared/map';
 import { Assets } from './assets';
 
 export interface PlayerAnimState {
@@ -24,18 +24,14 @@ export interface World {
   makePlayer(name: string, hue: number, id: number): THREE.Object3D;
   animatePlayer(o: THREE.Object3D, s: PlayerAnimState): void;
   focus(x: number, y: number, z: number): void;
-  dust(x: number, z: number, speed: number): void;
   info(): { quality: string; fps: number };
   playerFired(o: THREE.Object3D, weapon: number): void;
   playerReload(o: THREE.Object3D, dur: number, weapon: number): void;
   makeProjectile(kind: number): THREE.Object3D;
   projectileFx(o: THREE.Object3D, kind: number, dt: number): void;
   disposeObject(o: THREE.Object3D): void;
-  makeCar(hue: number, id: number): THREE.Object3D;
-  spinWheels(o: THREE.Object3D, meters: number): void;
-  makePlane(hue: number): THREE.Object3D;
+  makePickup(kind: number): THREE.Object3D;
   tracer(a: number[], b: number[], hit?: number, wl?: number): void;
-  vehicleFx(o: THREE.Object3D, kind: number, hpRatio: number, burning: boolean, dt: number): void;
   boom(x: number, y: number, z: number, r: number): void;
   update(nowMs: number, dt: number): void;
   resize(): void;
@@ -285,7 +281,6 @@ export function createWorld(canvas: HTMLCanvasElement): World {
 
   let assets: Assets | null = null;
   const mixers = new Set<THREE.AnimationMixer>();
-  const spinners = new Set<THREE.Object3D>();
   const timers: { at: number; fn: () => void }[] = [];
   const effects: { obj: THREE.Object3D; until: number; start: number; kind: 'tracer' | 'boom' | 'ring' | 'flash'; r?: number; a?: THREE.Vector3; b?: THREE.Vector3; len?: number }[] = [];
 
@@ -331,9 +326,6 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       inst.setMatrixAt(i, mx);
     });
     scene.add(inst);
-    // Flugplatz-Strasse: breite weisse Streifen
-    const paint = mat(0xf2f2f2);
-    for (let x = RUNWAY.x0 + 10; x < RUNWAY.x1 - 10; x += 24) scene.add(box(10, 0.06, 0.8, paint, x, 0.06, RUNWAY.z));
   }
 
   function fallbackBuildings(boxes: Box[]) {
@@ -391,7 +383,20 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     ])!;
   }
 
+  // Sichtbare Arena-Grenze: leicht rot leuchtende Waende rundum
+  function addBorder() {
+    const m = new THREE.MeshBasicMaterial({ color: 0xff3b3b, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false, fog: false });
+    for (let i = 0; i < 4; i++) {
+      const w = new THREE.Mesh(new THREE.PlaneGeometry(WORLD * 2, 14), m);
+      const a = (i * Math.PI) / 2;
+      w.position.set(Math.sin(a) * WORLD, 7, Math.cos(a) * WORLD);
+      w.rotation.y = a;
+      scene.add(w);
+    }
+  }
+
   function addMap(city: City) {
+    addBorder();
     markings();
     // Parks: ein ganzer Block
     const grass = mat(0x5f9a4a);
@@ -781,107 +786,37 @@ export function createWorld(canvas: HTMLCanvasElement): World {
       an.mixer.stopAllAction();
       mixers.delete(an.mixer);
     }
-    spinners.delete(o);
   }
 
-  // ---------------------------------------------------------------- Fahrzeuge
-  function shadowize(o: THREE.Object3D) {
-    o.traverse((c) => {
-      if ((c as THREE.Mesh).isMesh) c.castShadow = true;
-    });
-    return o;
-  }
-
-  function makeCar(hue: number, id: number) {
-    if (assets) {
-      const car = assets.cars[id % assets.cars.length].clone(true);
-      car.userData.wheels = [] as THREE.Object3D[];
-      car.traverse((o) => {
-        if (/wheel/i.test(o.name)) car.userData.wheels.push(o);
-      });
-      return shadowize(car);
+  // ---------------------------------------------------------------- Gegenstaende zum Aufsammeln
+  // kind: 0 Medikit, 1 Sturmgewehr, 2 RPG-7. Sie schweben, drehen sich und leuchten in der Farbe der Art.
+  function makePickup(kind: number): THREE.Object3D {
+    const root = new THREE.Group();
+    const col = [0x4ade80, 0xffd24a, 0xff8a3d][kind];
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.7, 0.95, 28), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.05;
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 3.2, 20, 1, true), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.06, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
+    beam.position.y = 1.6;
+    const spin = new THREE.Group(); // nur dieser Teil dreht sich (main.ts dreht die Wurzel, Ring und Strahl sind rund)
+    spin.position.y = 1.15;
+    if (kind === 0) {
+      const white = new THREE.MeshStandardMaterial({ color: 0xf4f4f4, roughness: 0.5 });
+      const red = new THREE.MeshBasicMaterial({ color: 0xe03131 });
+      const bx = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.5, 0.35), white);
+      const c1 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.12, 0.37), red);
+      const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.4, 0.37), red);
+      spin.add(bx, c1, c2);
+    } else {
+      const m = weaponModels()[kind].group.clone(true);
+      m.scale.setScalar(kind === 2 ? 1.2 : 1.8);
+      m.rotation.y = -Math.PI / 2; // Lauf nach vorn in Drehrichtung
+      m.position.set(0, 0, 0);
+      spin.add(m);
     }
-    const g = new THREE.Group();
-    const col = new THREE.Color().setHSL(hue / 360, 0.7, 0.5);
-    g.add(box(2.0, 0.8, 4.4, mat(col), 0, 0.75, 0));
-    g.add(box(1.7, 0.7, 2.1, mat(0x9fc8e0), 0, 1.45, 0.3));
-    const wheel = mat(0x151515);
-    for (const [x, z] of [
-      [-1.0, -1.4],
-      [1.0, -1.4],
-      [-1.0, 1.4],
-      [1.0, 1.4],
-    ]) {
-      const w = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 0.35, 10), wheel);
-      w.rotation.z = Math.PI / 2;
-      w.position.set(x, 0.45, z);
-      g.add(w);
-    }
-    return shadowize(g);
-  }
-
-  function spinWheels(o: THREE.Object3D, meters: number) {
-    const ws = o.userData.wheels as THREE.Object3D[] | undefined;
-    if (!ws) return;
-    const radius = (o.userData.wheelR as number) || 0.35;
-    for (const w of ws) w.rotation.x -= meters / radius;
-  }
-
-  // Flugzeug (selbst gebaut): Rumpf, Fluegel, Leitwerk, Fahrwerk und ein drehender Propeller
-  const planeGeo = {
-    fuselage: new THREE.CylinderGeometry(0.62, 0.42, 5.2, 14).rotateX(Math.PI / 2), // Nase bei -z
-    tail: new THREE.CylinderGeometry(0.42, 0.12, 2.4, 10).rotateX(Math.PI / 2),
-    nose: new THREE.SphereGeometry(0.62, 14, 10),
-    canopy: new THREE.SphereGeometry(0.55, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
-    wing: new THREE.BoxGeometry(11, 0.14, 1.9),
-    tip: new THREE.BoxGeometry(0.9, 0.16, 1.6),
-    stab: new THREE.BoxGeometry(3.6, 0.1, 1.0),
-    fin: new THREE.BoxGeometry(0.12, 1.5, 1.2),
-    wheel: new THREE.CylinderGeometry(0.34, 0.34, 0.22, 12).rotateZ(Math.PI / 2),
-    strut: new THREE.BoxGeometry(0.1, 0.8, 0.1),
-    blade: new THREE.BoxGeometry(0.22, 2.3, 0.05),
-    disc: new THREE.CircleGeometry(1.15, 16),
-  };
-  function makePlane(hue: number) {
-    const g = new THREE.Group();
-    const col = new THREE.Color().setHSL(hue / 360, 0.65, 0.5);
-    const white = mat(0xf0f1f2);
-    const accent = mat(col);
-    const dark = mat(0x222428);
-    const glass = new THREE.MeshLambertMaterial({ color: 0x7fb4d8, emissive: 0x0a1a28 });
-    const add = (geo: THREE.BufferGeometry, m: THREE.Material, x: number, y: number, z: number) => {
-      const mesh = new THREE.Mesh(geo, m);
-      mesh.position.set(x, y, z);
-      mesh.castShadow = true;
-      g.add(mesh);
-      return mesh;
-    };
-    add(planeGeo.fuselage, white, 0, 1.45, 0);
-    add(planeGeo.tail, white, 0, 1.55, 3.7);
-    add(planeGeo.nose, accent, 0, 1.45, -2.6).scale.set(1, 1, 0.9);
-    add(planeGeo.canopy, glass, 0, 1.85, -0.6).scale.set(1, 1, 1.9);
-    add(planeGeo.wing, white, 0, 1.15, -0.3);
-    add(planeGeo.tip, accent, -5.4, 1.15, -0.3);
-    add(planeGeo.tip, accent, 5.4, 1.15, -0.3);
-    add(planeGeo.stab, accent, 0, 1.65, 4.6);
-    add(planeGeo.fin, accent, 0, 2.3, 4.5);
-    for (const sx of [-1, 1]) {
-      add(planeGeo.strut, dark, sx * 0.9, 0.75, -0.9);
-      add(planeGeo.wheel, dark, sx * 0.9, 0.34, -0.9);
-    }
-    add(planeGeo.wheel, dark, 0, 0.36, 4.3).scale.setScalar(0.6);
-    const prop = new THREE.Group();
-    prop.position.set(0, 1.45, -3.2);
-    const b1 = new THREE.Mesh(planeGeo.blade, dark);
-    const b2 = b1.clone();
-    b2.rotation.z = Math.PI / 2;
-    const disc = new THREE.Mesh(planeGeo.disc, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthWrite: false }));
-    prop.add(b1, b2, disc);
-    g.add(prop);
-    g.userData.prop = prop;
-    g.scale.setScalar(0.75); // Spannweite ca. 8 m: passt noch zwischen die Haeuser
-    spinners.add(g);
-    return g;
+    root.add(ring, beam, spin);
+    // Der Gegenstand dreht sich in main.ts per rotation.y: Ring und Strahl sind rotationssymmetrisch
+    return root;
   }
 
   // ---------------------------------------------------------------- Waffenmodelle (prozedural, Lauf entlang +Z, Griff im Ursprung)
@@ -1203,61 +1138,10 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     shakeAmp = Math.max(shakeAmp, Math.max(0, 1 - d / (45 * k)) * 0.9 * Math.min(1.5, k));
   }
 
-  function dust(x: number, z: number, speed: number) {
-    const a = (Math.random() - 0.5) * 2;
-    smoke.emit(x + a, 0.25, z + (Math.random() - 0.5) * 2, a * 0.5, 0.6, 0, 0.9, 0.5, 2.2 + speed * 0.05, 0.62, 0.6, 0.55, 0.2, 0, 1.2);
-  }
-
-  // Fahrzeugschaden: ab halber Gesundheit raucht es, bei wenig Leben qualmt es dunkel mit Flammen,
-  // bei 0 Leben brennt es lichterloh, bis es nach einigen Sekunden explodiert.
-  const _v = new THREE.Vector3();
-  function vehicleFx(o: THREE.Object3D, kind: number, hpRatio: number, burning: boolean, dt: number) {
-    const stage = burning ? 3 : hpRatio < 0.25 ? 2 : hpRatio < 0.5 ? 1 : 0;
-    let glowSp = o.userData.glow as THREE.Sprite | undefined;
-    if (stage === 0) {
-      if (glowSp) glowSp.visible = false;
-      return;
-    }
-    const rate = [0, 9, 20, 55][stage];
-    o.userData.fxAcc = (o.userData.fxAcc ?? 0) + rate * dt;
-    // Motorraum: Auto vorn, Flugzeug an der Nase
-    const local = kind === 2 ? _v.set(0, 1.45, -2.2) : _v.set(0, 1.05, -1.5);
-    const wp = o.localToWorld(local.clone());
-    while (o.userData.fxAcc >= 1) {
-      o.userData.fxAcc -= 1;
-      const j = () => (Math.random() - 0.5) * 1.6;
-      if (stage === 1) {
-        const g = 0.5 + Math.random() * 0.15;
-        smoke.emit(wp.x + j() * 0.3, wp.y, wp.z + j() * 0.3, j() * 0.4, 1.6 + Math.random(), j() * 0.4, 1.4, 0.5, 2.2, g, g, g, 0.32, 0, 0.6);
-      } else {
-        const dark = stage === 3 ? 0.07 + Math.random() * 0.08 : 0.15 + Math.random() * 0.12;
-        smoke.emit(wp.x + j() * 0.4, wp.y + 0.2, wp.z + j() * 0.4, j() * 0.6, 2.4 + Math.random() * 2, j() * 0.6, 2.2 + Math.random(), 0.7, stage === 3 ? 4.5 : 3, dark, dark, dark, 0.4, 0, 0.5);
-        if (stage >= 2 && Math.random() < (stage === 3 ? 0.95 : 0.4)) {
-          fire.emit(wp.x + j() * 0.6, wp.y + 0.1, wp.z + j() * 0.6, j() * 0.5, 1.5 + Math.random() * 2.4, j() * 0.5, 0.45 + Math.random() * 0.3, stage === 3 ? 1.7 : 1.0, 0.2, 1, 0.45 + Math.random() * 0.35, 0.08, 0.9, 1, 0.8);
-        }
-      }
-    }
-    if (stage >= 2) {
-      if (!glowSp) {
-        glowSp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false }));
-        glowSp.position.copy(kind === 2 ? new THREE.Vector3(0, 1.5, -1.5) : new THREE.Vector3(0, 1.2, -1.0));
-        o.add(glowSp);
-        o.userData.glow = glowSp;
-      }
-      glowSp.visible = true;
-      const f = (stage === 3 ? 6 : 3) * (0.85 + Math.random() * 0.3);
-      glowSp.scale.set(f, f, 1);
-    }
-  }
-
   function update(nowMs: number, dt: number) {
     for (const m of mixers) m.update(dt);
     skyUniforms.uTime.value = nowMs / 1000;
     decalUniforms.uNow.value = performance.now() / 1000;
-    for (const o of spinners) {
-      const p = o.userData.prop as THREE.Object3D;
-      p.rotation.z += dt * (o.userData.spin ?? 38);
-    }
     for (let i = timers.length - 1; i >= 0; i--) {
       if (nowMs >= timers[i].at) {
         const fn = timers[i].fn;
@@ -1362,19 +1246,15 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     animatePlayer,
     playerFired,
     disposeObject,
-    makeCar,
-    spinWheels,
-    makePlane,
+    makePickup,
     makeProjectile,
     projectileFx,
     playerReload,
     tracer,
-    vehicleFx,
     boom,
     update,
     resize,
     focus,
-    dust,
     info: () => ({ quality, fps: Math.round(1 / ema) }),
   };
 }
