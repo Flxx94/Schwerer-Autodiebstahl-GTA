@@ -32,8 +32,14 @@
       .btn:active, .btn.on { background: rgba(255,176,32,.55); }
       #btnFire { right: calc(18px + env(safe-area-inset-right)); bottom: calc(22px + env(safe-area-inset-bottom)); width: 96px; height: 96px; font-size: 16px; }
       #btnWeapon { right: calc(110px + env(safe-area-inset-right)); bottom: calc(110px + env(safe-area-inset-bottom)); width: 62px; height: 62px; }
-        border: 2px solid var(--uib); border-radius: 27px; background: var(--ui); }
-      #crosshair { left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; border: 2px solid rgba(255,255,255,.8); }
+      #crosshair { left: 50%; top: 50%; width: 0; height: 0; pointer-events: none; --g: 7px; }
+      #crosshair i { position: absolute; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.65); border-radius: 1px; transition: background .08s; }
+      #crosshair .l { width: 10px; height: 2px; left: calc(-10px - var(--g)); top: -1px; }
+      #crosshair .r { width: 10px; height: 2px; left: var(--g); top: -1px; }
+      #crosshair .t { width: 2px; height: 10px; top: calc(-10px - var(--g)); left: -1px; }
+      #crosshair .b { width: 2px; height: 10px; top: var(--g); left: -1px; }
+      #crosshair .d { width: 3px; height: 3px; left: -1.5px; top: -1.5px; border-radius: 50%; }
+      #crosshair.hot i { background: #ff4040; }
       #hud { left: calc(12px + env(safe-area-inset-left)); top: calc(10px + env(safe-area-inset-top)); text-shadow: 0 1px 3px #000; }
       #hpbar { width: 150px; height: 12px; border: 2px solid var(--uib); border-radius: 7px; overflow: hidden; background: rgba(0,0,0,.35); }
       #hpfill { height: 100%; width: 100%; background: #4ade80; }
@@ -94,7 +100,7 @@
     <div id="ui">
       <div id="leftZone" class="zone"><div class="joy-base" id="joyBase"><div class="joy-knob" id="joyKnob"></div></div></div>
       <div id="rightZone" class="zone"></div>
-      <div id="crosshair"></div>
+      <div id="crosshair"><i class="l"></i><i class="r"></i><i class="t"></i><i class="b"></i><i class="d"></i></div>
       <div id="hitMark"></div><div id="hitHead"></div><div id="hitKill"></div>
       <div id="dmgFlash"></div>
       <div id="roundBox"><div id="roundTime"></div><div id="roundGoal"></div></div>

@@ -1,6 +1,6 @@
 // Spiel-Client (Stadtkampf): Netzwerk, Vorhersage (Prediction), Interpolation, Kamera und HUD.
 import * as THREE from 'three';
-import { buildCity, Box, PICKUPS, WORLD } from '../../shared/map';
+import { buildCity, Box, WORLD } from '../../shared/map';
 import { Body, Input, DT, newBody, copyBody, step } from '../../shared/sim';
 import { ctl, initControls } from './controls';
 import { createWorld } from './world';
@@ -41,11 +41,12 @@ let acc = 0;
 let lastFireSent = 0;
 const snaps: Snap[] = [];
 let latestPr: ProjS[] = [];
+let latestLb: { i: number; x: number; z: number }[] = [];
 
 const objs = {
   pl: new Map<number, THREE.Object3D>(),
   pr: new Map<number, THREE.Object3D>(),
-  pk: [] as THREE.Object3D[],
+  lb: new Map<number, THREE.Object3D>(),
 };
 let myMesh: THREE.Object3D | null = null;
 
@@ -98,12 +99,6 @@ function onWelcome(m: any, name: string) {
     const city = buildCity(m.seed);
     boxes = city.boxes;
     world.addMap(city);
-    for (const pk of PICKUPS) {
-      const o = world.makePickup(pk.kind);
-      o.position.set(pk.x, 0, pk.z);
-      world.scene.add(o);
-      objs.pk.push(o);
-    }
     mapBuilt = true;
   }
   clearObjects();
@@ -116,7 +111,7 @@ function onWelcome(m: any, name: string) {
 }
 
 function clearObjects() {
-  for (const g of [objs.pl, objs.pr]) {
+  for (const g of [objs.pl, objs.pr, objs.lb]) {
     for (const o of g.values()) {
       world.disposeObject(o);
       world.scene.remove(o);
@@ -145,9 +140,7 @@ function onSnap(s: any) {
   wReload = s.rl;
   wOwn = s.ow;
   round = s.rd;
-  s.pk.forEach((on: number, i: number) => {
-    if (objs.pk[i]) objs.pk[i].visible = !!on;
-  });
+  latestLb = s.lb;
   reconcile(s);
   if (hp < prevHp - 0.5 && hp > 0) flash('dmgFlash');
   prevHp = hp;
@@ -212,9 +205,10 @@ function onEvent(e: any) {
     world.boom(e.x, e.y, e.z, e.r);
     if (Math.hypot(e.x - body.x, e.z - body.z) < 25) navigator.vibrate?.(60);
   } else if (e.k === 'pick') {
-    if (e.by === myId) toast(['+50 Leben', 'Sturmgewehr aufgenommen', 'RPG-7 aufgenommen'][e.kind]);
-    const pk = PICKUPS[e.i];
-    if (pk) world.boom(pk.x, 0.5, pk.z, 0.01); // kleiner Funken
+    if (e.by === myId) toast(['Lootbox: +50 Leben', 'Lootbox: Sturmgewehr', 'Lootbox: RPG-7'][e.kind]);
+    world.boom(e.x, 0.8, e.z, 0.01); // kleiner Funken beim Oeffnen
+  } else if (e.k === 'lootnew') {
+    if (Math.hypot(e.x - body.x, e.z - body.z) < 90) toast('Neue Lootbox!', 1600);
   } else if (e.k === 'kill') {
     const how = e.hs ? ' 💀' : '';
     feed.push({ text: e.a ? `${e.a}  ${WEAPON_ICONS[e.w] ?? '➜'}  ${e.b}${how}` : `${e.b} hat es nicht geschafft`, until: performance.now() + 5000 });
@@ -302,13 +296,9 @@ function drawMinimap() {
     if (x > S || z > S || x < -40 || z < -40) continue;
     mg.fillRect(x, z, b.hw * 2 * scale, b.hd * 2 * scale);
   }
-  // Gegenstaende
-  const cols = ['#5bff8a', '#ffd24a', '#ff8a3d'];
-  PICKUPS.forEach((pk, i) => {
-    if (!objs.pk[i]?.visible) return;
-    mg.fillStyle = cols[pk.kind];
-    mg.fillRect(px(pk.x) - 3, pz(pk.z) - 3, 6, 6);
-  });
+  // Lootboxen
+  mg.fillStyle = '#ffc233';
+  for (const l of latestLb) mg.fillRect(px(l.x) - 4, pz(l.z) - 4, 8, 8);
   const last = snaps[snaps.length - 1];
   if (last) {
     mg.fillStyle = '#ff5a5a';
@@ -332,6 +322,82 @@ function drawMinimap() {
   mg.restore();
 }
 
+// ---------------------------------------------------------------- Zielen
+// Das Fadenkreuz liegt in der Bildmitte, die Kamera sitzt aber hinter der Schulter. Damit Treffer genau dort landen,
+// wo das Fadenkreuz hinzeigt, wird der Kamerastrahl bis zur ersten Wand oder zum ersten Gegner verfolgt und der Schuss
+// vom Auge der Figur auf diesen Punkt gerichtet.
+const _cp = new THREE.Vector3();
+const _cd = new THREE.Vector3();
+function rayBoxT(o: THREE.Vector3, d: THREE.Vector3, b: Box): number {
+  const mn = [b.x - b.hw, 0, b.z - b.hd];
+  const mx = [b.x + b.hw, b.h, b.z + b.hd];
+  const oo = [o.x, o.y, o.z];
+  const dd = [d.x, d.y, d.z];
+  let t0 = 0;
+  let t1 = Infinity;
+  for (let k = 0; k < 3; k++) {
+    if (Math.abs(dd[k]) < 1e-9) {
+      if (oo[k] < mn[k] || oo[k] > mx[k]) return Infinity;
+    } else {
+      let a = (mn[k] - oo[k]) / dd[k];
+      let c = (mx[k] - oo[k]) / dd[k];
+      if (a > c) [a, c] = [c, a];
+      t0 = Math.max(t0, a);
+      t1 = Math.min(t1, c);
+      if (t0 > t1) return Infinity;
+    }
+  }
+  return t0;
+}
+function aimShot(): { yaw: number; pitch: number; enemy: boolean } {
+  const c = world.camera;
+  c.getWorldPosition(_cp);
+  c.getWorldDirection(_cd);
+  let t = 80;
+  if (_cd.y < -0.001) t = Math.min(t, -_cp.y / _cd.y);
+  for (const b of boxes) t = Math.min(t, rayBoxT(_cp, _cd, b));
+  let enemy = false;
+  const last = snaps[snaps.length - 1];
+  if (last) {
+    for (const p of last.pl.values()) {
+      if (p.i === myId || p.hp <= 0) continue;
+      const ox = p.x - _cp.x;
+      const oy = 1 - _cp.y;
+      const oz = p.z - _cp.z;
+      const along = ox * _cd.x + oy * _cd.y + oz * _cd.z;
+      if (along < 1 || along > t) continue;
+      const dist2 = ox * ox + oy * oy + oz * oz - along * along;
+      if (dist2 < 0.8 * 0.8) {
+        t = along;
+        enemy = true;
+      }
+    }
+  }
+  const tx = _cp.x + _cd.x * t;
+  const ty = _cp.y + _cd.y * t;
+  const tz = _cp.z + _cd.z * t;
+  const ex = body.x;
+  const ey = 1.5;
+  const ez = body.z;
+  const dx = tx - ex;
+  const dy = ty - ey;
+  const dz = tz - ez;
+  // zu nah (Wand direkt vor der Kamera): normale Blickrichtung verwenden
+  if (Math.hypot(dx, dz) < 1.2) return { yaw: ctl.yaw, pitch: ctl.pitch, enemy };
+  return { yaw: Math.atan2(-dx, -dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)), enemy };
+}
+
+const chEl = $('crosshair');
+let chSpread = 0;
+function updateCrosshair(dt: number) {
+  const a = aimShot();
+  chEl.classList.toggle('hot', a.enemy);
+  chSpread = Math.max(0, chSpread - dt * 40);
+  const moving = Math.min(1, body.speed / 7) * 3;
+  chEl.style.setProperty('--g', `${7 + chSpread + moving}px`);
+  chEl.style.display = joined && !needInit && hp > 0 ? 'block' : 'none';
+}
+
 // ---------------------------------------------------------------- Simulation (feste Schritte)
 function tick() {
   if (!joined || needInit) return;
@@ -345,7 +411,9 @@ function tick() {
     const now = performance.now();
     if (ctl.fire && now - lastFireSent >= 70) {
       lastFireSent = now;
-      send({ t: 'f', yaw: ctl.yaw, pitch: ctl.pitch });
+      const a = aimShot();
+      send({ t: 'f', yaw: a.yaw, pitch: a.pitch });
+      chSpread = Math.min(14, chSpread + (wIdx === 2 ? 12 : 4));
     }
   }
 }
@@ -423,8 +491,30 @@ function syncObjects(rt: number, alpha: number, dt: number) {
     const on = hp > 0;
     world.animatePlayer(myMesh, { vx: on ? (body.x - prev.x) / DT : 0, vz: on ? (body.z - prev.z) / DT : 0, yaw: ctl.yaw, dead: hp <= 0, dt, weapon: wIdx });
   }
-  // Gegenstaende drehen sich
-  for (const o of objs.pk) if (o.visible) o.rotation.y = nowMs / 700;
+  // Lootboxen: neue anlegen, verschwundene entfernen, Kiste dreht sich und schwebt
+  const seenLb = new Set<number>();
+  for (const l of latestLb) {
+    seenLb.add(l.i);
+    let o = objs.lb.get(l.i);
+    if (!o) {
+      o = world.makeLootbox();
+      o.position.set(l.x, 0, l.z);
+      world.scene.add(o);
+      objs.lb.set(l.i, o);
+    }
+    const crate = o.getObjectByName('crate');
+    if (crate) {
+      crate.rotation.y = nowMs / 650;
+      crate.position.y = 1.15 + Math.sin(nowMs / 420 + l.x) * 0.12;
+    }
+  }
+  for (const [id, o] of objs.lb) {
+    if (!seenLb.has(id)) {
+      world.disposeObject(o);
+      world.scene.remove(o);
+      objs.lb.delete(id);
+    }
+  }
   // RPG-Granaten
   const seen = new Set<number>();
   for (const p of latestPr) {
@@ -501,6 +591,7 @@ function frame(now: number) {
   world.update(now, dt);
   world.renderer.render(world.scene, world.camera);
   updateHud(now);
+  updateCrosshair(dt);
   if (joined && now - mmAt > 100) {
     mmAt = now;
     drawMinimap();

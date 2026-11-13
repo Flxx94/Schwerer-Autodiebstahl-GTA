@@ -1,7 +1,7 @@
 // Rauchtest (Stadtkampf): startet zwei Bots gegen einen laufenden Server (npm start) und prueft die Kernfunktionen.
 // Aufruf: npm run smoke   (Server muss auf ws://localhost:8080 laufen, Raumcode "freunde")
 import WebSocket from 'ws';
-import { buildMap, PICKUPS, WORLD } from '../shared/map';
+import { buildMap, WORLD } from '../shared/map';
 
 const URL = process.env.URL ?? 'ws://localhost:8080';
 const ROOM = process.env.ROOM ?? 'freunde';
@@ -80,7 +80,7 @@ async function main() {
   check('beide Bots verbunden', !!a.snap && !!b.snap && a.snap.pl.length === 2);
   check('Start: Pistole mit vollem Magazin', a.snap.wi === 0 && a.snap.am === 12 && a.snap.rs === -1, `${a.snap.wn} ${a.snap.am}/${a.snap.rs}`);
   check('Runde laeuft', a.snap.rd.s === 0 && a.snap.rd.t > 0, JSON.stringify(a.snap.rd));
-  check('Gegenstaende gemeldet', Array.isArray(a.snap.pk) && a.snap.pk.length === PICKUPS.length);
+  check('Lootboxen gemeldet', Array.isArray(a.snap.lb) && a.snap.lb.length >= 1, `${a.snap.lb?.length}`);
 
   // Laufen
   const z0 = a.snap.you.z;
@@ -139,10 +139,24 @@ async function main() {
   await sleep(1700);
   check('Magazin wieder voll', a.snap.am === 12, `am ${a.snap.am}`);
 
+  // Lootbox einsammeln (im Testmodus liegt eine neben Alice)
+  let got: any = null;
+  for (let i = 0; i < 12 && !got; i++) {
+    const A = a.me();
+    const box = a.snap.lb.map((l: any) => ({ ...l, d: Math.hypot(l.x - A.x, l.z - A.z) })).sort((p: any, q: any) => p.d - q.d)[0];
+    if (box && box.d < 12 && clearLine(A.x, A.z, box.x, box.z)) {
+      await a.drive(Math.ceil((box.d / 7) * 30) + 3, 0, 1, Math.atan2(-(box.x - A.x), -(box.z - A.z)));
+    } else {
+      await sleep(600);
+    }
+    got = a.events.find((e) => e.k === 'pick' && e.by === a.id);
+  }
+  check('Lootbox eingesammelt', !!got, got ? `Inhalt ${got.kind}` : `Boxen ${JSON.stringify(a.snap.lb)} Alice ${JSON.stringify(a.me())}`);
+
   // Waffe ohne Besitz laesst sich nicht waehlen
-  a.send({ t: 'weapon', i: 2 });
+  a.send({ t: 'weapon', i: a.snap.ow[2] ? 1 : 2 });
   await sleep(150);
-  check('RPG ohne Pickup nicht waehlbar', a.snap.wi === 0);
+  check('Waffe ohne Besitz nicht waehlbar', a.snap.wi === 0 || a.snap.ow[a.snap.wi] === 1);
 
   // Rundenende: mit KILL_LIMIT=1 beendet der erste Kill die Runde
   if (process.env.EXPECT_ROUND_END) {

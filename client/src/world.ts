@@ -30,7 +30,7 @@ export interface World {
   makeProjectile(kind: number): THREE.Object3D;
   projectileFx(o: THREE.Object3D, kind: number, dt: number): void;
   disposeObject(o: THREE.Object3D): void;
-  makePickup(kind: number): THREE.Object3D;
+  makeLootbox(): THREE.Object3D;
   tracer(a: number[], b: number[], hit?: number, wl?: number): void;
   boom(x: number, y: number, z: number, r: number): void;
   update(nowMs: number, dt: number): void;
@@ -788,34 +788,45 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     }
   }
 
-  // ---------------------------------------------------------------- Gegenstaende zum Aufsammeln
-  // kind: 0 Medikit, 1 Sturmgewehr, 2 RPG-7. Sie schweben, drehen sich und leuchten in der Farbe der Art.
-  function makePickup(kind: number): THREE.Object3D {
-    const root = new THREE.Group();
-    const col = [0x4ade80, 0xffd24a, 0xff8a3d][kind];
-    const ring = new THREE.Mesh(new THREE.RingGeometry(0.7, 0.95, 28), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false }));
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.y = 0.05;
-    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.8, 0.8, 3.2, 20, 1, true), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.06, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }));
-    beam.position.y = 1.6;
-    const spin = new THREE.Group(); // nur dieser Teil dreht sich (main.ts dreht die Wurzel, Ring und Strahl sind rund)
-    spin.position.y = 1.15;
-    if (kind === 0) {
-      const white = new THREE.MeshStandardMaterial({ color: 0xf4f4f4, roughness: 0.5 });
-      const red = new THREE.MeshBasicMaterial({ color: 0xe03131 });
-      const bx = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.5, 0.35), white);
-      const c1 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.12, 0.37), red);
-      const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.4, 0.37), red);
-      spin.add(bx, c1, c2);
-    } else {
-      const m = weaponModels()[kind].group.clone(true);
-      m.scale.setScalar(kind === 2 ? 1.2 : 1.8);
-      m.rotation.y = -Math.PI / 2; // Lauf nach vorn in Drehrichtung
-      m.position.set(0, 0, 0);
-      spin.add(m);
+  // ---------------------------------------------------------------- Lootbox
+  // Goldene Kiste mit Fragezeichen, Leuchtring und Lichtstrahl (weithin sichtbar). Der Inhalt wird erst beim Oeffnen gewuerfelt.
+  let lootTex: THREE.CanvasTexture | null = null;
+  function makeLootbox(): THREE.Object3D {
+    if (!lootTex) {
+      const c = document.createElement('canvas');
+      c.width = c.height = 128;
+      const g = c.getContext('2d')!;
+      g.fillStyle = '#e8a91c';
+      g.fillRect(0, 0, 128, 128);
+      g.strokeStyle = '#5a3b06';
+      g.lineWidth = 10;
+      g.strokeRect(5, 5, 118, 118);
+      g.fillStyle = '#fff3c4';
+      g.font = 'bold 92px system-ui, sans-serif';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillText('?', 64, 70);
+      lootTex = new THREE.CanvasTexture(c);
+      lootTex.colorSpace = THREE.SRGBColorSpace;
     }
-    root.add(ring, beam, spin);
-    // Der Gegenstand dreht sich in main.ts per rotation.y: Ring und Strahl sind rotationssymmetrisch
+    const root = new THREE.Group();
+    const col = 0xffc233;
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.9, 1.15, 32), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.06;
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.5, 14, 20, 1, true), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.09, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending, fog: false }));
+    beam.position.y = 7;
+    const crate = new THREE.Group();
+    crate.name = 'crate';
+    const face = new THREE.MeshStandardMaterial({ map: lootTex, roughness: 0.55, metalness: 0.25, emissive: 0x6a4300, emissiveIntensity: 0.5 });
+    crate.add(new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.85, 0.85), face));
+    const band = new THREE.MeshStandardMaterial({ color: 0x3a2604, roughness: 0.6 });
+    for (const [w, h, d] of [[0.9, 0.12, 0.9], [0.12, 0.9, 0.9]] as number[][]) crate.add(new THREE.Mesh(new THREE.BoxGeometry(w, h, d), band));
+    crate.position.y = 1.15;
+    const light = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: col, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false }));
+    light.scale.set(2.6, 2.6, 1);
+    light.position.y = 1.15;
+    root.add(ring, beam, crate, light);
     return root;
   }
 
@@ -1246,7 +1257,7 @@ export function createWorld(canvas: HTMLCanvasElement): World {
     animatePlayer,
     playerFired,
     disposeObject,
-    makePickup,
+    makeLootbox,
     makeProjectile,
     projectileFx,
     playerReload,
