@@ -1,6 +1,6 @@
-// Laedt die Modelle (alles frei nutzbar, siehe README): KayKit (CC0), Kenney (MIT). Klappt etwas nicht,
+// Laedt die Modelle (alles frei nutzbar, siehe README): KayKit (CC0). Klappt etwas nicht,
 // meldet loadAssets() null und das Spiel nutzt die einfachen Klotz-Modelle als Ersatz.
-// Alle Groessen sind echte Meter: Figur 1,8 m, Auto 4,5 m, Hydrant 0,85 m, Strassenlaterne 7,5 m ...
+// Alle Groessen sind echte Meter: Figur 1,8 m, Hydrant 0,85 m, Strassenlaterne 7,5 m ...
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { BUILDING_NAMES } from '../../shared/map';
@@ -14,18 +14,12 @@ export type PropName = 'hydrant' | 'trash' | 'bench' | 'dumpster' | 'boxA' | 'bo
 
 export interface Assets {
   buildings: Prop[]; // building_A..H (Massstab 1 = 2 x 2 m Grundflaeche, wird beim Platzieren skaliert)
-  cars: THREE.Object3D[]; // fertig skalierte Vorlagen, Front zeigt nach -z
   streetlight: Prop; // in Metern
   bush: Prop; // in Metern
   props: Record<PropName, Prop>; // in Metern
   chars: { scene: THREE.Object3D; clips: THREE.AnimationClip[] }[];
 }
 
-const CAR_NAMES = ['car_sedan', 'car_taxi', 'car_police', 'car_hatchback', 'car_stationwagon'];
-const TRUCKS = ['red', 'yellow', 'green', 'purple'];
-// Soll-Laenge der Fahrzeuge in Metern (KayKit-Autos sind sehr kurz modelliert, deshalb pro Modell)
-export const CAR_LENGTH = 4.5;
-export const TRUCK_LENGTH = 5.2;
 export const CHAR_HEIGHT = 1.8;
 
 function firstMesh(root: THREE.Object3D): THREE.Mesh {
@@ -61,10 +55,8 @@ export async function loadAssets(base = 'assets/'): Promise<Assets | null> {
     const load = (p: string) => loader.loadAsync(base + p);
     const propFiles = ['city/firehydrant', 'city/trash_A', 'city/bench', 'city/dumpster', 'city/box_A', 'city/box_B', 'city/trafficlight_A', 'city/trafficlight_B', 'city/trafficlight_C', 'city/watertower', 'props/Barrel_A', 'props/Pallet_Small', 'props/Box_C'];
 
-    const [bGltf, cGltf, tGltf, lamp, bush, rogue, hooded, pGltf] = await Promise.all([
+    const [bGltf, lamp, bush, rogue, hooded, pGltf] = await Promise.all([
       Promise.all(BUILDING_NAMES.map((n) => load(`city/building_${n}.gltf`))),
-      Promise.all(CAR_NAMES.map((n) => load(`city/${n}.gltf`))),
-      Promise.all(TRUCKS.map((n) => load(`vehicles/vehicle-truck-${n}.glb`))),
       load('city/streetlight.gltf'),
       load('city/bush.gltf'),
       load('chars/Rogue.glb'),
@@ -76,37 +68,6 @@ export async function loadAssets(base = 'assets/'): Promise<Assets | null> {
       const m = firstMesh(g.scene);
       return { geometry: m.geometry, material: cheap(m.material as THREE.Material) };
     };
-
-    // Fahrzeuge: auf Soll-Laenge skalieren, auf den Boden setzen, Front nach -z
-    const prepVehicle = (model: THREE.Object3D, length: number, flip: boolean) => {
-      model.traverse((o) => {
-        const mesh = o as THREE.Mesh;
-        if (mesh.isMesh) mesh.material = cheap(mesh.material as THREE.Material);
-      });
-      const wrap = new THREE.Group();
-      if (flip) model.rotation.y = Math.PI;
-      wrap.add(model);
-      const box = new THREE.Box3().setFromObject(wrap);
-      const k = length / (box.max.z - box.min.z);
-      wrap.scale.setScalar(k);
-      wrap.position.y = -box.min.y * k;
-      const outer = new THREE.Group();
-      outer.add(wrap);
-      // Reifenradius fuer die Drehung der Raeder
-      outer.updateMatrixWorld(true);
-      let wheel: THREE.Object3D | null = null;
-      outer.traverse((o) => {
-        if (!wheel && /wheel/i.test(o.name)) wheel = o;
-      });
-      if (wheel) {
-        const wb = new THREE.Box3().setFromObject(wheel);
-        outer.userData.wheelR = Math.max(0.2, (wb.max.y - wb.min.y) / 2);
-      }
-      return outer;
-    };
-    // KayKit-Autos schauen nach +z und sind im Modell nur 0,94 lang, aber 0,42 breit: auf 4,5 m Laenge
-    // ergibt das eine Breite von 2,0 m, passend. Kenney-Pickups schauen auch nach +z.
-    const cars = [...cGltf.map((g) => prepVehicle(g.scene, CAR_LENGTH, true)), ...tGltf.map((g) => prepVehicle(g.scene, TRUCK_LENGTH, true))];
 
     const chars = [rogue, hooded].map((g) => {
       const scene = g.scene;
@@ -137,7 +98,7 @@ export async function loadAssets(base = 'assets/'): Promise<Assets | null> {
       pallet: fit(pr[11], 1.2, 'w'),
       crate: fit(pr[12], 1.0, 'h'),
     };
-    return { buildings: bGltf.map(toProp), cars, streetlight: fit(toProp(lamp), 7.5, 'h'), bush: fit(toProp(bush), 1.3, 'h'), props, chars };
+    return { buildings: bGltf.map(toProp), streetlight: fit(toProp(lamp), 7.5, 'h'), bush: fit(toProp(bush), 1.3, 'h'), props, chars };
   } catch (e) {
     console.warn('Modelle konnten nicht geladen werden, nutze einfache Modelle', e);
     return null;

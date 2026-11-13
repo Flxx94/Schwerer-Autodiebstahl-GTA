@@ -1,6 +1,6 @@
 {
-  "name": "Schwerer Autodiebstahl",
-  "short_name": "Autodiebstahl",
+  "name": "Stadtkampf",
+  "short_name": "Stadtkampf",
   "start_url": ".",
   "display": "fullscreen",
   "orientation": "landscape",

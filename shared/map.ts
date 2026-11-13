@@ -14,11 +14,9 @@ export interface Box {
   pz: number;
 }
 
-export const WORLD = 480; // halbe Kantenlaenge der Spielwelt in Metern
+export const WORLD = 130; // halbe Kantenlaenge der Arena in Metern (260 x 260 m)
 export const CELL = 52; // Abstand der Bloecke; dazwischen liegen 24 m breite Strassen
 export const PITCH = 14; // Abstand der vier Gebaeude innerhalb eines Blocks
-// Flugplatz: freie Strasse entlang der x-Achse bei z = 0
-export const RUNWAY = { x0: 70, x1: 450, z: 0, halfWidth: 12 };
 
 // Hoehe der Modelle building_A..H bei Massstab 1 (Grundflaeche 2 x 2). Mit Massstab ca. 6
 // hat ein Stockwerk etwa 3,3 m, also normale Tueren und Fenster neben einer 1,8 m grossen Figur.
@@ -52,7 +50,7 @@ export interface City {
   parks: { x: number; z: number }[]; // ganze Bloecke als Park
 }
 
-export const BLOCKS = 8; // Bloecke von -8 bis 8 in beiden Richtungen
+export const BLOCKS = 2; // Bloecke von -2 bis 2 in beiden Richtungen: 5 x 5 Bloecke
 
 export function buildCity(seed = 1337): City {
   const r = mulberry32(seed);
@@ -62,10 +60,8 @@ export function buildCity(seed = 1337): City {
     for (let j = -BLOCKS; j <= BLOCKS; j++) {
       const cx = i * CELL;
       const cz = j * CELL;
-      // Startplatz in der Mitte bleibt frei
+      // Der Platz in der Mitte bleibt frei (dort liegt der Raketenwerfer)
       if (i === 0 && j === 0) continue;
-      // Flugplatz-Strasse bleibt frei
-      if (j === 0 && cx >= RUNWAY.x0 - CELL / 2 && cx <= RUNWAY.x1 + CELL / 2) continue;
       if (r() < 0.1) {
         parks.push({ x: cx, z: cz });
         continue;
@@ -119,3 +115,31 @@ export function distToBoxes(boxes: Box[], x: number, z: number): number {
   }
   return best;
 }
+
+// Aufsammelbare Gegenstaende auf festen Plaetzen (Strassenkreuzungen und Platz in der Mitte).
+// kind: 0 Medikit, 1 Sturmgewehr, 2 Raketenwerfer
+export interface Pickup {
+  x: number;
+  z: number;
+  kind: 0 | 1 | 2;
+  respawn: number; // Sekunden bis der Gegenstand wieder da ist
+}
+export const PICKUPS: Pickup[] = [
+  { x: 0, z: 0, kind: 2, respawn: 45 },
+  { x: 78, z: -78, kind: 2, respawn: 45 },
+  { x: -78, z: 78, kind: 2, respawn: 45 },
+  ...[
+    [26, 26],
+    [-26, 26],
+    [26, -26],
+    [-26, -26],
+  ].map(([x, z]) => ({ x, z, kind: 1 as const, respawn: 25 })),
+  ...[
+    [78, 0],
+    [-78, 0],
+    [0, 78],
+    [0, -78],
+    [78, 78],
+    [-78, -78],
+  ].map(([x, z]) => ({ x, z, kind: 0 as const, respawn: 20 })),
+];

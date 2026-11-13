@@ -1,13 +1,38 @@
-# Schwerer Autodiebstahl
+# Stadtkampf
 
-Kleines Open-World-Multiplayer-Spiel für den **Handy-Browser**, gedacht für dich und 5 bis 10 Freunde.
-Man läuft durch eine kleine Stadt, spawnt Autos und Flugzeuge und schießt. Alles ist für **Touch** gebaut
-(Joystick links, Kamera-Wischen und Buttons rechts), am Rechner geht es auch mit Tastatur.
+Kleiner **Deathmatch-Shooter** für den **Handy-Browser**, gedacht für dich und 2 bis 10 Freunde. Jeder gegen jeden in einer
+kompakten Stadt-Arena (260 × 260 m). Alles ist für **Touch** gebaut (Joystick links, Kamera-Wischen und Buttons rechts),
+am Rechner geht es auch mit Tastatur. (Das Repository heißt noch nach dem früheren Open-World-Prototyp.)
 
 - Kostet nichts: Browser-Spiel, Open-Source-Werkzeuge, CC0-Grafiken, keine Store-Gebühren.
 - Ein einziger Node.js-Prozess ist Webserver und Spielserver. Freunde bekommen nur einen Link.
-- Der Server entscheidet über Bewegung, Spawns, Treffer und Schaden (Clients können nicht schummeln).
+- Der Server entscheidet über Bewegung, Treffer, Schaden, Aufsammeln und Runden (Clients können nicht schummeln).
 - **Auf dem Tablet oder Handy (Termux) braucht es nur Node.js:** das fertige Spiel liegt im Ordner `release/`.
+
+## Spielkonzept
+
+**Eine Runde dauert 5 Minuten oder bis jemand 20 Kills hat.** Danach zeigt eine Rangliste 10 Sekunden lang das Ergebnis,
+dann beginnt sofort die nächste Runde mit zurückgesetzten Punkten. Wer zu spät dazukommt, steigt einfach ein.
+
+- **Alle starten gleich:** mit der Pistole (Magazin 12, unendlich Reserve) und 100 Leben. Wer will, bleibt dabei.
+- **Bessere Waffen musst du dir holen.** Sie liegen als leuchtende Gegenstände fest auf der Karte und kommen nach
+  einigen Sekunden wieder. Das Sturmgewehr liegt an den vier Kreuzungen rund um die Mitte, der RPG-7 mitten auf dem
+  Platz (und an zwei Ecken). Wer in die Mitte läuft, bekommt die stärkste Waffe, aber auch alle Gegner zu sehen.
+  Gewehr und RPG haben begrenzte Reserve (90 beziehungsweise 3 Raketen); stirbst du, sind sie weg.
+- **Medikits** (+50 Leben) liegen auf den Straßen. Ein Kill gibt zusätzlich +15 Leben.
+- **Kopfschüsse** machen doppelten Schaden. Das Fadenkreuz zeigt Treffer (weiß), Kopfschüsse (gelb) und Kills (rot).
+- **Fair spawnen:** Nach dem Tod gibt es nach 3 Sekunden einen neuen Spawn möglichst weit weg von Gegnern und nie direkt
+  auf einer Waffe. 2,5 Sekunden Schutz (die Figur blinkt), der endet, sobald du schießt.
+- **Nachladen** gehört dazu: jedes Magazin ist begrenzt, bei leerem Magazin lädt die Figur automatisch nach.
+- **Cover zählt:** Gebäude blockieren Kugeln und RPG-Raketen. Die RPG-Explosion (Radius 6,5 m) trifft auch durch
+  Ecken, und die eigene Rakete tut nur halb so viel Schaden.
+- Die Minimap zeigt Gegner (rot), Gegenstände (grün, gelb, orange) und den Arena-Rand. Am roten Rand ist Schluss.
+
+| Waffe | Schaden | Magazin | Nachladen | Reserve |
+|---|---|---|---|---|
+| Pistole | 22 (Kopf 44) | 12 | 1,4 s | unendlich |
+| Sturmgewehr | 12 (Kopf 24), 10 Schuss/s | 30 | 2,0 s | 90 |
+| RPG-7 | bis 110 im Umkreis | 1 | 2,6 s | 3 |
 
 ## Auf dem Tablet hosten (Termux)
 
@@ -63,6 +88,8 @@ Einstellungen per Umgebungsvariable:
 | `PORT` | `8080` | Port des Servers |
 | `ROOM_CODE` | `freunde` | Raumcode (leer = kein Code) |
 | `MAX_PLAYERS` | `10` | Maximale Spielerzahl |
+| `KILL_LIMIT` | `20` | Kills, bei denen die Runde endet |
+| `ROUND_TIME` | `300` | Rundendauer in Sekunden |
 
 Mit `?room=geheim` in der URL ist der Raumcode vorausgefüllt.
 
@@ -85,35 +112,20 @@ Tipp für Handys: im Browser-Menü „Zum Home-Bildschirm“ wählen, dann start
 
 | | Touch | Tastatur (Test am Rechner) |
 | --- | --- | --- |
-| Laufen, Lenken | Joystick links (erscheint, wo der Daumen aufsetzt) | WASD oder Pfeile |
+| Laufen | Joystick links (erscheint, wo der Daumen aufsetzt) | WASD oder Pfeile |
 | Umsehen | Wischen rechts, auch über dem Feuer-Button | Maus ziehen |
 | Schießen | Feuer-Button halten | Leertaste |
-| Ein- und Aussteigen | Button „Einsteigen“ (nächstes freies Fahrzeug) | E |
-| Auto oder Flugzeug spawnen | „Spawn“, dann Auto oder Flugzeug | C (Auto), V (Flugzeug) |
 | Waffe wechseln | „Waffe“ oder Slot im Waffen-HUD antippen | Q, oder 1/2/3 |
 | Nachladen | „Nachladen“-Button | T |
-| Flugzeug | Joystick hoch/runter = Nase hoch/runter (Looping), links/rechts leicht = Schräglage und Kurve, voll links/rechts = Fassrolle; Schubregler | WASD, R/F = mehr/weniger Schub |
 
-Das Flugzeug hebt ab ca. 70 km/h ab. Es spawnt vor dir in der Richtung mit der längsten freien Strecke; gibt es keine,
-steht es am Flugplatz (breite Straße nach Osten). Das Flugzeug fliegt voll dreidimensional: Rollen, Loopings und Kurvenflug sind möglich. Zu Boden zeigen oder verkehrt aufsetzen endet im Absturz.
-
-### Waffen und Munition
-Die Reserve ist unendlich, aber jede Waffe hat ein Magazin und muss nachgeladen werden (das HUD unten links zeigt Waffe, Magazin und Nachladebalken).
-
-| Waffe | Magazin | Nachladen |
-|---|---|---|
-| Pistole | 12 | 1,4 s |
-| Sturmgewehr | 30 | 2,0 s |
-| RPG-7 (mit eigenem Modell, Rückstoß-Feuerstrahl) | 1 | 2,6 s |
-| Flugzeug: Bordkanone | 100 | 2,8 s |
-| Flugzeug: Raketen | 4 | 3,5 s |
-| Flugzeug: Bomben (fallen aus dem Rumpf) | 3 | 4,5 s |
+Das Waffen-HUD unten links zeigt Waffe, Magazin, Reserve und einen Nachladebalken. Oben in der Mitte stehen Rundenzeit
+und Kill-Ziel, links oben die Rangliste.
 
 ## Aufbau
 
 ```
 client/   Browser-Client (Three.js): Welt, Touch-Steuerung, HUD, Modelle laden
-server/   Spielserver (Node.js, ws): Simulation, Treffer, Spawns, liefert den Client aus
+server/   Spielserver (Node.js, ws): Runden, Treffer, Aufsammeln, Spawns, liefert den Client aus
 shared/   Karte und Bewegungslogik, von Server und Client gemeinsam genutzt
 scripts/  build.mjs (esbuild), smoke.ts (Bot-Test)
 release/  fertiger Build: server.mjs und public/ (Client mit Grafiken)
@@ -122,34 +134,25 @@ release/  fertiger Build: server.mjs und public/ (Client mit Grafiken)
 Netzwerk in Kurzform: Der Client schickt 30 mal pro Sekunde seine Eingaben und sagt seine eigene Bewegung mit derselben
 Funktion (`shared/sim.ts`) voraus. Der Server rechnet nach, schickt 20 Snapshots pro Sekunde und bestätigt jede Eingabe;
 weicht der Client ab, wird er korrigiert. Andere Spieler werden mit 100 ms Puffer weich interpoliert.
+Der Bot-Test (`npm run smoke`) läuft gegen einen Server mit `SPAWN_NEAR=1` (nahe Spawns); für den Rundenende-Test
+zusätzlich `KILL_LIMIT=1` und `EXPECT_ROUND_END=1`.
 
 ## Grafik und Lizenzen
 
 Alle Modelle sind frei nutzbar (Lizenzdateien liegen in `client/public/assets/`):
 
-- **Kay Lousberg (KayKit)**, CC0: [City Builder Bits](https://kaylousberg.itch.io/city-builder-bits) (Gebäude, Autos, Laternen, Ampeln, Bänke, Hydranten, Container, Wassertürme, Büsche),
+- **Kay Lousberg (KayKit)**, CC0: [City Builder Bits](https://kaylousberg.itch.io/city-builder-bits) (Gebäude, Laternen, Ampeln, Bänke, Hydranten, Container, Wassertürme, Büsche),
   [Adventurers](https://kaylousberg.itch.io/kaykit-adventurers) (Figuren mit Animationen),
   [Prototype Bits](https://github.com/KayKit-Game-Assets/KayKit-Prototype-Bits-1.0) (Fässer, Paletten, Kisten)
-- **Kenney**, MIT: Pickups aus dem [Starter-Kit Racing](https://github.com/KenneyNL/Starter-Kit-Racing)
-- Selbst gebaut: Flugzeug, Kiefern, Himmel, Partikel und Decals
+- Selbst gebaut: Waffenmodelle (Pistole, Sturmgewehr, RPG-7), Kiefern, Himmel, Partikel und Decals
 
-Maßstäbe sind echte Meter: Figur 1,8 m, Autos 4,5 bis 5,2 m, Stockwerke rund 3,3 m, Straßen 24 m breit.
-Das Flugzeug ist mit 8 m Spannweite absichtlich kleiner, damit es zwischen die Häuser passt.
+Maßstäbe sind echte Meter: Figur 1,8 m, Stockwerke rund 3,3 m, Straßen 24 m breit.
 
 Effekte: Himmel-Shader mit Wolken, weiche Schatten, Leuchtspuren, Mündungsfeuer, Funken, **Einschusslöcher** an
-Wänden und am Boden (verblassen nach etwa 25 Sekunden), Brandflecken nach Explosionen. Fahrzeuge **rauchen** ab halber
-Gesundheit, **brennen** bei 0 Leben rund 4 Sekunden (Insassen nehmen Schaden) und **explodieren** dann mit Feuerball,
-Trümmern, Rauchsäule und Kamerawackeln. Die Figuren zielen mit dem Oberkörper, während die Beine weiterlaufen.
+Wänden und am Boden (verblassen nach etwa 25 Sekunden), Brandflecken und Feuerball mit Trümmern und Kamerawackeln bei
+RPG-Explosionen, RPG-Rückstoß-Feuerstrahl. Die Figuren zielen mit dem Oberkörper, während die Beine weiterlaufen.
 Ist das Tablet zu langsam, schaltet das Spiel nach wenigen Sekunden selbst Schatten und Auflösung herunter.
 Mit `?q=low` oder `?q=high` an der Adresse legst du die Stufe fest.
 
-Weitere Packs von itch.io erreiche ich in meiner Umgebung nicht (nur GitHub). Eigene Modelle (`.gltf`/`.glb`)
-kannst du in `client/public/assets/` legen und in `client/src/assets.ts` eintragen.
-
 Das Projekt selbst steht unter der GNU General Public License v3 (siehe `LICENSE`). Eingesetzte Bibliotheken:
 Three.js (MIT), ws (MIT), esbuild (MIT).
-
-## Stand und Grenzen
-
-Spielbarer Prototyp. Noch nicht umgesetzt: Beifahrer-Sitze, Lag-Kompensation beim Schießen, Sounds, Konten und
-Speicherstand. Beim Gestalten bitte keine fremden Marken oder Logos verwenden.
